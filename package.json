@@ -1,0 +1,9 @@
+{
+  "name": "papereval-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI paper evaluation — students upload a question paper and answer sheet, Gemini grades it question by question.",
+  "engines": {
+    "node": ">=18"
+  }
+}

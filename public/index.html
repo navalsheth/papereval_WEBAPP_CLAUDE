@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperEval — AI paper evaluation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<style>
+  :root{
+    --navy:#10263A; --navy-2:#1C4058; --teal:#12777D; --teal-soft:#E4F1F1;
+    --paper:#FBFAF5; --paper-line:#E7E3D6; --margin-red:#D98A8A;
+    --ink:#1E2A33; --muted:#66717A; --card:#FFFFFF; --border:#E4E1D8;
+    --correct:#1E8E5A; --correct-bg:#E7F5EE; --wrong:#C0392B; --wrong-bg:#FBEAE8;
+    --partial:#B0761E; --partial-bg:#FBF1E1; --unanswered:#6B7280; --unanswered-bg:#EEEFF1;
+    --radius:12px; color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --navy:#0B1621; --navy-2:#13293B; --teal:#3FB6BB; --teal-soft:#12313380;
+      --paper:#0E1418; --paper-line:#232B31; --margin-red:#8A5555;
+      --ink:#E8E6DE; --muted:#9AA3AA; --card:#161D22; --border:#2A3239;
+      --correct:#4CC38A; --correct-bg:#123626; --wrong:#E17D72; --wrong-bg:#3A1C1A;
+      --partial:#E0AC5B; --partial-bg:#3A2E14; --unanswered:#9AA3AA; --unanswered-bg:#242A2F;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --navy:#0B1621; --navy-2:#13293B; --teal:#3FB6BB; --teal-soft:#12313380;
+    --paper:#0E1418; --paper-line:#232B31; --margin-red:#8A5555;
+    --ink:#E8E6DE; --muted:#9AA3AA; --card:#161D22; --border:#2A3239;
+    --correct:#4CC38A; --correct-bg:#123626; --wrong:#E17D72; --wrong-bg:#3A1C1A;
+    --partial:#E0AC5B; --partial-bg:#3A2E14; --unanswered:#9AA3AA; --unanswered-bg:#242A2F;
+    color-scheme: dark;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{background:var(--paper);color:var(--ink);font-family:'Inter',system-ui,sans-serif;min-height:100vh;-webkit-font-smoothing:antialiased;}
+  @media (prefers-reduced-motion: reduce){ *{animation-duration:0.01ms !important; transition-duration:0.01ms !important;} }
+  h1,h2,h3{font-family:'Source Serif 4',Georgia,serif;margin:0;color:var(--navy);}
+  :root[data-theme="dark"] h1, :root[data-theme="dark"] h2, :root[data-theme="dark"] h3{color:var(--ink);}
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) h1, :root:not([data-theme="light"]) h2, :root:not([data-theme="light"]) h3{color:var(--ink);} }
+  button{font-family:inherit;}
+  .app{max-width:1120px;margin:0 auto;padding:0 20px 60px;}
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:22px 4px 18px;}
+  .wordmark{display:flex;align-items:center;gap:10px;}
+  .wordmark span{font-family:'Source Serif 4',serif;font-size:22px;font-weight:600;color:var(--navy);letter-spacing:-0.01em;}
+  :root[data-theme="dark"] .wordmark span{color:var(--ink);}
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .wordmark span{color:var(--ink);} }
+  .tag{font-size:12px;color:var(--muted);border:1px solid var(--border);padding:4px 10px;border-radius:20px;}
+
+  .ruled{background-image: repeating-linear-gradient(var(--paper) 0 34px, var(--paper-line) 34px 35px);border-left:2px solid var(--margin-red);border-radius:14px;padding:48px 40px;}
+  @media (max-width:640px){ .ruled{padding:32px 18px;} }
+  .hero-copy{max-width:520px;margin-bottom:34px;}
+  .hero-copy h1{font-size:34px;line-height:1.15;margin-bottom:10px;}
+  @media (max-width:640px){ .hero-copy h1{font-size:26px;} }
+  .hero-copy p{color:var(--muted);font-size:16px;line-height:1.6;margin:0;}
+
+  .upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:26px;}
+  @media (max-width:720px){ .upload-grid{grid-template-columns:1fr;} }
+  .dropzone{background:var(--card);border:1.5px dashed var(--border);border-radius:var(--radius);padding:26px 20px;text-align:center;cursor:pointer;transition:border-color .15s ease, background .15s ease;}
+  .dropzone:hover, .dropzone.drag{border-color:var(--teal); background:var(--teal-soft);}
+  .dropzone:focus-visible{outline:2px solid var(--teal); outline-offset:2px;}
+  .dropzone .dz-icon{font-size:44px;margin-bottom:10px;}
+  .dropzone .dz-title{font-weight:600;font-size:15px;margin-bottom:3px;}
+  .dropzone .dz-sub{font-size:13px;color:var(--muted);}
+  .dropzone .dz-file{margin-top:10px;font-size:13px;color:var(--teal);font-weight:600;word-break:break-all;}
+  .dropzone input{display:none;}
+
+  .evaluate-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap;}
+  .btn-primary{background:var(--navy);color:#fff;border:none;padding:18px 38px;border-radius:10px;font-size:17.5px;font-weight:600;cursor:pointer;transition:background .15s ease, transform .08s ease;}
+  .btn-primary:hover:not(:disabled){background:var(--navy-2);}
+  .btn-primary:active:not(:disabled){transform:scale(0.98);}
+  .btn-primary:disabled{background:var(--border);color:var(--muted);cursor:not-allowed;}
+  .btn-primary:focus-visible{outline:2px solid var(--teal);outline-offset:2px;}
+  .hint{font-size:13px;color:var(--muted);}
+  .btn-secondary{background:none;border:1px solid var(--border);color:var(--ink);padding:10px 18px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;}
+
+  .loading-wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:120px 20px;text-align:center;gap:18px;}
+  .spinner{width:38px;height:38px;border-radius:50%;border:3px solid var(--border);border-top-color:var(--teal);animation:spin 0.9s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .loading-msg{font-size:15px;color:var(--muted);min-height:20px;}
+
+  .error-wrap{padding:60px 20px;text-align:center;}
+  .error-wrap .icon{font-size:34px;margin-bottom:14px;}
+  .error-wrap p{color:var(--muted);max-width:440px;margin:0 auto 20px;}
+
+  .stats-bar{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin:26px 0 22px;background:var(--card);}
+  @media (max-width:640px){ .stats-bar{grid-template-columns:repeat(2,1fr);} }
+  .stat{padding:18px 14px;border-right:1px solid var(--border);}
+  .stat:last-child{border-right:none;}
+  @media (max-width:640px){ .stat:nth-child(2n){border-right:none;} .stat{border-bottom:1px solid var(--border);} }
+  .stat .num{font-family:'Source Serif 4',serif;font-size:28px;font-weight:600;line-height:1;color:var(--navy);}
+  :root[data-theme="dark"] .stat .num{color:var(--ink);}
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .stat .num{color:var(--ink);} }
+  .stat .label{font-size:12.5px;color:var(--muted);margin-top:5px;}
+  .stat.correct .num{color:var(--correct);} .stat.wrong .num{color:var(--wrong);}
+  .stat.partial .num{color:var(--partial);} .stat.unanswered .num{color:var(--unanswered);}
+
+  .tabs{display:none;gap:6px;margin-bottom:14px;}
+  @media (max-width:860px){ .tabs{display:flex;} }
+  .tab-btn{flex:1;padding:9px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--ink);font-size:14px;font-weight:600;cursor:pointer;}
+  .tab-btn.active{background:var(--navy);color:#fff;border-color:var(--navy);}
+
+  .report-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:20px;align-items:start;}
+  @media (max-width:860px){ .report-grid{grid-template-columns:1fr;} .panel{display:none;} .panel.active{display:block;} }
+  .panel{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
+  .panel-head{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+  .panel-head h2{font-size:16px;}
+  .page-nav{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted);}
+  .page-nav button{background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--ink);font-size:13px;}
+  .page-nav button:disabled{opacity:.35;cursor:not-allowed;}
+
+  .scan-wrap{padding:16px;}
+  .scan-frame{border-left:2px solid var(--margin-red);border-radius:6px;box-shadow:0 8px 24px rgba(16,38,58,0.14);padding:10px;background:var(--card);}
+  .scan-frame img{display:block;width:100%;border-radius:2px;}
+
+  .qlist{max-height:640px;overflow-y:auto;}
+  .qrow{border-bottom:1px solid var(--border);}
+  .qrow:last-child{border-bottom:none;}
+  .qrow-head{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;}
+  .qrow-head:focus-visible{outline:2px solid var(--teal);outline-offset:-2px;}
+  .qtitle{font-size:14.5px;font-weight:600;color:var(--ink);}
+  .qmeta{display:flex;align-items:center;gap:10px;flex-shrink:0;}
+  .pill{font-size:12.5px;font-weight:600;padding:3px 10px;border-radius:20px;white-space:nowrap;}
+  .pill.correct{color:var(--correct);background:var(--correct-bg);}
+  .pill.wrong{color:var(--wrong);background:var(--wrong-bg);}
+  .pill.partial{color:var(--partial);background:var(--partial-bg);}
+  .pill.unanswered{color:var(--unanswered);background:var(--unanswered-bg);}
+  .chev{transition:transform .15s ease;color:var(--muted);}
+  .qrow.open .chev{transform:rotate(90deg);}
+  .qbody{display:none;padding:0 16px 16px;}
+  .qrow.open .qbody{display:block;}
+  .sub{border:1px solid var(--border);border-radius:9px;margin-top:8px;overflow:hidden;}
+  .sub-head{width:100%;display:flex;align-items:center;justify-content:space-between;padding:10px 13px;background:var(--paper);border:none;cursor:pointer;text-align:left;}
+  .sub-head .st{font-size:13.5px;font-weight:600;}
+  .sub-body{display:none;padding:13px 15px;font-size:14px;line-height:1.65;}
+  .sub.open .sub-body{display:block;}
+  .sub.open .chev{transform:rotate(90deg);}
+  .step-line{margin-bottom:6px;}
+  .step-num{color:var(--muted);font-size:12.5px;margin-right:6px;}
+  .mistake-block{background:var(--wrong-bg);border-radius:7px;padding:10px 12px;margin-bottom:8px;}
+  .mistake-block .lbl{font-size:12px;font-weight:700;color:var(--wrong);margin-bottom:3px;}
+  .correct-block{background:var(--correct-bg);border-radius:7px;padding:10px 12px;}
+  .correct-block .lbl{font-size:12px;font-weight:700;color:var(--correct);margin-bottom:3px;}
+  .unclear{color:var(--muted);font-style:italic;}
+  .footnote{margin-top:26px;font-size:12.5px;color:var(--muted);text-align:center;}
+  .screen{display:none;}
+  .screen.active{display:block;}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div class="wordmark">
+      <svg width="30" height="30" viewBox="0 0 40 40" fill="none">
+        <rect x="1.5" y="1.5" width="37" height="37" rx="9" stroke="var(--navy)" stroke-width="2"/>
+        <path d="M13 10.5H21C24 10.5 26 12.6 26 15.3C26 18 24 20 21 20H16.5V29.5" stroke="var(--navy)" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+        <path d="M16.5 15.3H21" stroke="var(--navy)" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M23 24L26.5 27.5L33 20" stroke="var(--teal)" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>PaperEval</span>
+    </div>
+    <div class="tag">Live — Gemini</div>
+  </div>
+
+  <section id="screen-upload" class="screen active">
+    <div class="ruled">
+      <div class="hero-copy">
+        <h1>Evaluate a paper in minutes.</h1>
+        <p>Upload the question paper and the written solutions. PaperEval reads every page, marks each answer, and shows exactly where the working went wrong.</p>
+      </div>
+      <div class="upload-grid">
+        <label class="dropzone" id="dz1" tabindex="0">
+          <input type="file" id="file1" accept=".pdf,image/*" multiple>
+          <div class="dz-icon">📄</div>
+          <div class="dz-title">Question paper</div>
+          <div class="dz-sub">PDF or photos — tap to choose, or drop here</div>
+          <div class="dz-file" id="dz1-name"></div>
+        </label>
+        <label class="dropzone" id="dz2" tabindex="0">
+          <input type="file" id="file2" accept=".pdf,image/*" multiple>
+          <div class="dz-icon">✍️</div>
+          <div class="dz-title">Answer sheet</div>
+          <div class="dz-sub">PDF or photos, in page order</div>
+          <div class="dz-file" id="dz2-name"></div>
+        </label>
+      </div>
+      <div class="evaluate-row">
+        <button class="btn-primary" id="evalBtn" disabled>Evaluate</button>
+        <span class="hint" id="evalHint">Add both files to continue</span>
+      </div>
+    </div>
+    <p class="footnote">Files are compressed in your browser before upload and evaluated by Gemini through a server-side key — the key never reaches this page.</p>
+  </section>
+
+  <section id="screen-loading" class="screen">
+    <div class="loading-wrap">
+      <div class="spinner"></div>
+      <div class="loading-msg" id="loadingMsg">Uploading pages…</div>
+    </div>
+  </section>
+
+  <section id="screen-error" class="screen">
+    <div class="error-wrap">
+      <div class="icon">⚠️</div>
+      <h2 id="errorTitle">Evaluation failed</h2>
+      <p id="errorMsg">Something went wrong.</p>
+      <button class="btn-secondary" id="retryBtn">Back to upload</button>
+    </div>
+  </section>
+
+  <section id="screen-report" class="screen">
+    <div class="stats-bar" id="statsBar"></div>
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="page">Page</button>
+      <button class="tab-btn" data-tab="questions">Questions</button>
+    </div>
+    <div class="report-grid">
+      <div class="panel active" data-panel="page">
+        <div class="panel-head">
+          <h2 id="pageTitle">Page 1</h2>
+          <div class="page-nav">
+            <button id="prevPage">← Previous</button>
+            <span id="pageIndicator">1 / 1</span>
+            <button id="nextPage">Next →</button>
+          </div>
+        </div>
+        <div class="scan-wrap"><div class="scan-frame"><img id="scanImg" alt="Answer sheet page"></div></div>
+      </div>
+      <div class="panel active" data-panel="questions">
+        <div class="panel-head"><h2>Evaluation</h2></div>
+        <div class="qlist" id="qlist"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script type="module">
+import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
+
+const MAX_DIM = 1600;      // longest edge, px — keeps payloads reasonable
+const JPEG_QUALITY = 0.82;
+
+/* ---------- File → normalized page images ---------- */
+async function fileToPages(file){
+  if (file.type === 'application/pdf'){
+    return await pdfToPages(file);
+  }
+  return [await imageFileToPage(file)];
+}
+
+async function imageFileToPage(file){
+  const bitmap = await loadImageBitmap(file);
+  return drawToPage(bitmap);
+}
+
+function loadImageBitmap(file){
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => { resolve(img); };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+function drawToPage(imgLike){
+  const w = imgLike.width || imgLike.naturalWidth;
+  const h = imgLike.height || imgLike.naturalHeight;
+  const scale = Math.min(1, MAX_DIM / Math.max(w, h));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(w * scale);
+  canvas.height = Math.round(h * scale);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(imgLike, 0, 0, canvas.width, canvas.height);
+  const dataUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
+  return { dataUrl, mimeType: 'image/jpeg', data: dataUrl.split(',')[1] };
+}
+
+async function pdfToPages(file){
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const pages = [];
+  for (let i = 1; i <= pdf.numPages; i++){
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale: 1.6 });
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext('2d');
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    pages.push(drawToPage(canvas));
+  }
+  return pages;
+}
+
+/* ---------- Upload interactions ---------- */
+let questionPages = [];  // [{dataUrl, mimeType, data}]
+let answerPages = [];
+
+function wireDropzone(zoneId, inputId, nameId, onFiles){
+  const zone = document.getElementById(zoneId);
+  const input = document.getElementById(inputId);
+  const nameEl = document.getElementById(nameId);
+  zone.addEventListener('click', (e) => { if(e.target !== input) input.click(); });
+  zone.addEventListener('keydown', (e) => { if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); input.click(); } });
+  const handle = async (files) => {
+    if (!files.length) return;
+    nameEl.textContent = 'Processing…';
+    try{
+      const pages = await onFiles(files);
+      nameEl.textContent = `${files.length} file${files.length>1?'s':''} — ${pages.length} page${pages.length>1?'s':''} ready`;
+    } catch(err){
+      console.error(err);
+      nameEl.textContent = 'Could not read this file — try a different format.';
+    }
+    checkReady();
+  };
+  input.addEventListener('change', () => handle(Array.from(input.files)));
+  ['dragover','dragenter'].forEach(evt => zone.addEventListener(evt, (e)=>{ e.preventDefault(); zone.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(evt => zone.addEventListener(evt, (e)=>{ e.preventDefault(); zone.classList.remove('drag'); }));
+  zone.addEventListener('drop', (e) => {
+    if(e.dataTransfer.files.length){ handle(Array.from(e.dataTransfer.files)); }
+  });
+}
+
+wireDropzone('dz1','file1','dz1-name', async (files) => {
+  const pageLists = await Promise.all(files.map(fileToPages));
+  questionPages = pageLists.flat();
+  return questionPages;
+});
+wireDropzone('dz2','file2','dz2-name', async (files) => {
+  const pageLists = await Promise.all(files.map(fileToPages));
+  answerPages = pageLists.flat();
+  return answerPages;
+});
+
+function checkReady(){
+  const btn = document.getElementById('evalBtn');
+  const hint = document.getElementById('evalHint');
+  if(questionPages.length && answerPages.length){ btn.disabled = false; hint.textContent = 'Ready to evaluate'; }
+  else { btn.disabled = true; hint.textContent = 'Add both files to continue'; }
+}
+
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+document.getElementById('evalBtn').addEventListener('click', runEvaluation);
+document.getElementById('retryBtn').addEventListener('click', () => showScreen('screen-upload'));
+
+async function runEvaluation(){
+  showScreen('screen-loading');
+  const msgs = ['Uploading pages…','Reading the question paper…','Matching answers to questions…','Checking each step of the working…','Preparing the report…'];
+  let i = 0;
+  const msgEl = document.getElementById('loadingMsg');
+  msgEl.textContent = msgs[0];
+  const timer = setInterval(() => { i = Math.min(i+1, msgs.length-1); msgEl.textContent = msgs[i]; }, 1800);
+
+  try{
+    const res = await fetch('/api/evaluate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        questionPaperPages: questionPages.map(p => ({ mimeType: p.mimeType, data: p.data })),
+        answerSheetPages: answerPages.map(p => ({ mimeType: p.mimeType, data: p.data }))
+      })
+    });
+    const json = await res.json();
+    clearInterval(timer);
+    if (!res.ok){
+      showError(json.error || 'The evaluation service returned an error.');
+      return;
+    }
+    buildReport(json);
+    showScreen('screen-report');
+  } catch(err){
+    clearInterval(timer);
+    console.error(err);
+    showError('Could not reach the evaluation service. Check your connection and try again.');
+  }
+}
+
+function showError(message){
+  document.getElementById('errorMsg').textContent = message;
+  showScreen('screen-error');
+}
+
+/* ---------- Report rendering ---------- */
+let currentPage = 1;
+let currentQuestions = [];
+
+const statusLabel = { correct: "Correct", wrong: "Wrong", partial: "Partially wrong", unanswered: "Unanswered" };
+
+function buildReport(result){
+  currentQuestions = result.questions || [];
+  const totals = result.totals || { total: currentQuestions.length, correct:0, wrong:0, partial:0, unanswered:0 };
+
+  document.getElementById('statsBar').innerHTML = `
+    <div class="stat"><div class="num">${totals.total}</div><div class="label">Total questions</div></div>
+    <div class="stat correct"><div class="num">${totals.correct}</div><div class="label">Correct</div></div>
+    <div class="stat wrong"><div class="num">${totals.wrong}</div><div class="label">Wrong</div></div>
+    <div class="stat partial"><div class="num">${totals.partial}</div><div class="label">Partially wrong</div></div>
+    <div class="stat unanswered"><div class="num">${totals.unanswered}</div><div class="label">Unanswered</div></div>
+  `;
+
+  const qlist = document.getElementById('qlist');
+  qlist.innerHTML = currentQuestions.map(q => `
+    <div class="qrow" data-page="${q.page}" id="qrow-${q.id}">
+      <button class="qrow-head" aria-expanded="false">
+        <span class="qtitle">${escapeHtml(q.title || ('Question ' + q.id))}</span>
+        <span class="qmeta">
+          <span class="pill ${q.status}">${statusLabel[q.status] || q.status}</span>
+          <span class="chev">▸</span>
+        </span>
+      </button>
+      <div class="qbody">
+        ${renderSub('Solution written', q.id, 'written',
+          (q.written && q.written.length) ? q.written.map((s,idx)=>`<div class="step-line"><span class="step-num">Step ${idx+1}</span><span class="math">${escapeHtml(s)}</span></div>`).join('')
+                     : `<span class="unclear">No working found on the page.</span>`)}
+        ${renderSub('Mistake', q.id, 'mistake',
+          (q.mistakeWrong || q.mistakeCorrect) ? `<div class="mistake-block"><div class="lbl">${q.mistakeStep ? 'On step ' + q.mistakeStep : 'Mistake'}</div>
+              ${q.mistakeWrong ? `<div>Written: <span class="math">${escapeHtml(q.mistakeWrong)}</span></div>` : ''}
+              ${q.mistakeCorrect ? `<div style="margin-top:6px;">Should be: <span class="math">${escapeHtml(q.mistakeCorrect)}</span></div>` : ''}</div>`
+              : (q.status==='unanswered' ? `<span class="unclear">No attempt to mark.</span>` : `<span class="unclear">No mistakes — fully correct.</span>`))}
+        ${renderSub('Correct solution', q.id, 'correct', `<span class="math">${escapeHtml(q.correctSolution || '')}</span>`)}
+      </div>
+    </div>
+  `).join('');
+
+  document.querySelectorAll('.qrow-head').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const row = btn.closest('.qrow');
+      const open = row.classList.toggle('open');
+      btn.setAttribute('aria-expanded', open);
+    });
+  });
+  document.querySelectorAll('.sub-head').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sub = btn.closest('.sub');
+      const open = sub.classList.toggle('open');
+      btn.setAttribute('aria-expanded', open);
+    });
+  });
+
+  currentPage = 1;
+  renderPage();
+  renderMath();
+}
+
+function renderSub(label, qid, key, bodyHtml){
+  return `
+    <div class="sub" id="sub-${qid}-${key}">
+      <button class="sub-head" aria-expanded="false">
+        <span class="st">${label}</span>
+        <span class="chev">▸</span>
+      </button>
+      <div class="sub-body">${bodyHtml}</div>
+    </div>
+  `;
+}
+
+function escapeHtml(str){
+  const div = document.createElement('div');
+  div.textContent = str == null ? '' : String(str);
+  return div.innerHTML;
+}
+
+function renderPage(){
+  const total = answerPages.length || 1;
+  document.getElementById('pageTitle').textContent = `Page ${currentPage}`;
+  document.getElementById('pageIndicator').textContent = `${currentPage} / ${total}`;
+  const img = document.getElementById('scanImg');
+  img.src = (answerPages[currentPage-1] || {}).dataUrl || '';
+  document.getElementById('prevPage').disabled = currentPage === 1;
+  document.getElementById('nextPage').disabled = currentPage === total;
+}
+
+document.getElementById('prevPage').addEventListener('click', () => { if(currentPage>1){ currentPage--; renderPage(); } });
+document.getElementById('nextPage').addEventListener('click', () => { if(currentPage<answerPages.length){ currentPage++; renderPage(); } });
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    const tab = btn.dataset.tab;
+    document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.dataset.panel === tab));
+  });
+});
+
+function renderMath(){
+  document.querySelectorAll('.math').forEach(el => {
+    const tex = el.textContent;
+    try{ katex.render(tex, el, {throwOnError:false}); }
+    catch(e){ el.textContent = tex; }
+  });
+}
+</script>
+</body>
+</html>
