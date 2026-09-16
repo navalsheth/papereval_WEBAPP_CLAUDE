@@ -11,7 +11,7 @@ export const config = {
   }
 };
 
-const GEMINI_MODEL = 'gemini-3.6-flash';
+const GEMINI_MODEL = 'gemini-2.5-flash'; // testing: lighter/cheaper model vs gemini-3.6-flash — see README note
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 const RESPONSE_SCHEMA = {
@@ -58,7 +58,12 @@ const RESPONSE_SCHEMA = {
             type: 'STRING',
             description: 'What that line should be, in LaTeX. Omit if correct or unanswered.'
           },
-          correctSolution: { type: 'STRING', description: 'The fully correct final answer/solution, in LaTeX.' }
+          correctSolution: {
+            type: 'ARRAY',
+            items: { type: 'STRING' },
+            description:
+              'The COMPLETE correct solution as a sequence of steps (same style as written[]) — every step of a proper method, not just the final answer. The last item should state the final answer clearly.'
+          }
         },
         required: ['id', 'page', 'title', 'status', 'written', 'correctSolution']
       }
@@ -73,15 +78,18 @@ Non-negotiable rules:
 1. In "written", reproduce EXACTLY what the student wrote — every step, in their own notation. Do not correct spelling, do not fill in missing steps, do not "clean up" their working. Never invent a step they did not write.
 2. If any part of the handwriting is illegible or ambiguous, write the literal string "<unclear>" in place of that part. Never guess at unclear content.
 3. If a question has no attempt at all, set status to "unanswered" and written to an empty array.
-4. Use LaTeX notation for all math (\\frac{a}{b}, \\sin, \\cos, \\sqrt{}, ^{}, _{}, etc.) so it can be typeset legibly — but the mathematical content must still be an exact copy of what was written, never a rewritten, simplified, or "corrected" version.
+4. Formatting: write each field as plain text, and wrap ONLY the mathematical notation in single dollar signs, e.g. "Evaluate $\\int \\frac{1}{\\sqrt{3-4x}}\\,dx$". Keep ordinary words (labels like "Evaluate", "Solve for x", short explanations) as plain text outside the dollar signs — do not put whole sentences inside math mode. Inside the dollar signs use proper LaTeX (\\frac{a}{b}, \\sin, \\sqrt{}, ^{}, _{}, etc). The mathematical content itself must still be an exact copy of what was written, never rewritten or simplified — this formatting rule only affects how it's typeset, never what it says.
 5. Grading status:
    - "correct": final answer and method are both correct.
    - "wrong": the final answer is incorrect.
    - "partial": some correct steps followed by an error, or a correct method with a minor slip.
    - "unanswered": left blank.
 6. For "wrong" and "partial", identify the exact step (1-based index into written[]) where the first mistake occurs, quote what was written there in mistakeWrong, and give what it should have been in mistakeCorrect.
-7. Page numbers must match the order the answer sheet pages were provided in, starting at 1.
-8. Return ONLY JSON matching the provided schema — no prose, no markdown fences, no commentary.`;
+7. "correctSolution" must be the COMPLETE worked solution, step by step, like a model answer a teacher would write — never just the final result on its own.
+8. Page numbers must match the order the answer sheet pages were provided in, starting at 1.
+9. You MUST include every single question that appears on the question paper as one entry in "questions" — never stop partway through. "totals.total" must always exactly equal the number of items in "questions".
+10. Keep every field strictly to its content — the question, the working, the mistake, the solution. Never include comments about your own output, formatting notes, apologies, or any meta text of any kind in any field.
+11. Return ONLY JSON matching the provided schema — no prose, no markdown fences, no commentary outside the JSON.`;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -125,7 +133,9 @@ export default async function handler(req, res) {
     generationConfig: {
       responseMimeType: 'application/json',
       responseSchema: RESPONSE_SCHEMA,
-      temperature: 0.1
+      temperature: 0.1,
+      maxOutputTokens: 65536,
+      thinkingConfig: { thinkingBudget: 0 } // gemini-2.5-flash uses thinkingBudget (not thinkingLevel); 0 = thinking off
     }
   };
 
@@ -163,6 +173,14 @@ export default async function handler(req, res) {
       console.error('Failed to parse Gemini JSON output:', textPart);
       res.status(502).json({ error: 'Could not parse the evaluation result. Please try again.' });
       return;
+    }
+
+    // Defensive check: flag it if the model didn't finish every question,
+    // rather than silently showing a mismatched count.
+    const declaredTotal = result?.totals?.total;
+    const actualCount = Array.isArray(result?.questions) ? result.questions.length : 0;
+    if (typeof declaredTotal === 'number' && declaredTotal !== actualCount) {
+      result.incomplete = true;
     }
 
     res.status(200).json(result);
