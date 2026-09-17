@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
 <style>
   :root{
     --navy:#10263A; --navy-2:#1C4058; --teal:#12777D; --teal-soft:#E4F1F1;
@@ -87,6 +88,7 @@
   .error-wrap{padding:60px 20px;text-align:center;}
   .error-wrap .icon{font-size:34px;margin-bottom:14px;}
   .error-wrap p{color:var(--muted);max-width:440px;margin:0 auto 20px;}
+  .warning-banner{background:var(--partial-bg);color:var(--partial);border:1px solid var(--partial);border-radius:9px;padding:11px 15px;font-size:13.5px;margin:26px 0 -8px;}
 
   .stats-bar{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin:26px 0 22px;background:var(--card);}
   @media (max-width:640px){ .stats-bar{grid-template-columns:repeat(2,1fr);} }
@@ -214,6 +216,7 @@
   </section>
 
   <section id="screen-report" class="screen">
+    <div class="warning-banner" id="warningBanner" style="display:none;"></div>
     <div class="stats-bar" id="statsBar"></div>
     <div class="tabs">
       <button class="tab-btn active" data-tab="page">Page</button>
@@ -404,6 +407,14 @@ function buildReport(result){
   currentQuestions = result.questions || [];
   const totals = result.totals || { total: currentQuestions.length, correct:0, wrong:0, partial:0, unanswered:0 };
 
+  const banner = document.getElementById('warningBanner');
+  if (result.incomplete){
+    banner.style.display = 'block';
+    banner.textContent = `Only ${currentQuestions.length} of ${totals.total} questions came back fully graded. This can happen on long papers — try again, or split the answer sheet into smaller batches.`;
+  } else {
+    banner.style.display = 'none';
+  }
+
   document.getElementById('statsBar').innerHTML = `
     <div class="stat"><div class="num">${totals.total}</div><div class="label">Total questions</div></div>
     <div class="stat correct"><div class="num">${totals.correct}</div><div class="label">Correct</div></div>
@@ -424,14 +435,16 @@ function buildReport(result){
       </button>
       <div class="qbody">
         ${renderSub('Solution written', q.id, 'written',
-          (q.written && q.written.length) ? q.written.map((s,idx)=>`<div class="step-line"><span class="step-num">Step ${idx+1}</span><span class="math">${escapeHtml(s)}</span></div>`).join('')
+          (q.written && q.written.length) ? q.written.map((s,idx)=>`<div class="step-line"><span class="step-num">Step ${idx+1}</span>${escapeHtml(s)}</div>`).join('')
                      : `<span class="unclear">No working found on the page.</span>`)}
         ${renderSub('Mistake', q.id, 'mistake',
           (q.mistakeWrong || q.mistakeCorrect) ? `<div class="mistake-block"><div class="lbl">${q.mistakeStep ? 'On step ' + q.mistakeStep : 'Mistake'}</div>
-              ${q.mistakeWrong ? `<div>Written: <span class="math">${escapeHtml(q.mistakeWrong)}</span></div>` : ''}
-              ${q.mistakeCorrect ? `<div style="margin-top:6px;">Should be: <span class="math">${escapeHtml(q.mistakeCorrect)}</span></div>` : ''}</div>`
+              ${q.mistakeWrong ? `<div>Written: ${escapeHtml(q.mistakeWrong)}</div>` : ''}
+              ${q.mistakeCorrect ? `<div style="margin-top:6px;">Should be: ${escapeHtml(q.mistakeCorrect)}</div>` : ''}</div>`
               : (q.status==='unanswered' ? `<span class="unclear">No attempt to mark.</span>` : `<span class="unclear">No mistakes — fully correct.</span>`))}
-        ${renderSub('Correct solution', q.id, 'correct', `<span class="math">${escapeHtml(q.correctSolution || '')}</span>`)}
+        ${renderSub('Correct solution', q.id, 'correct',
+          (Array.isArray(q.correctSolution) && q.correctSolution.length) ? q.correctSolution.map((s,idx)=>`<div class="step-line"><span class="step-num">Step ${idx+1}</span>${escapeHtml(s)}</div>`).join('')
+                     : `<div class="step-line">${escapeHtml(q.correctSolution || '')}</div>`)}
       </div>
     </div>
   `).join('');
@@ -497,10 +510,13 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 });
 
 function renderMath(){
-  document.querySelectorAll('.math').forEach(el => {
-    const tex = el.textContent;
-    try{ katex.render(tex, el, {throwOnError:false}); }
-    catch(e){ el.textContent = tex; }
+  if (typeof renderMathInElement === 'undefined'){ setTimeout(renderMath, 80); return; }
+  renderMathInElement(document.getElementById('qlist'), {
+    delimiters: [
+      { left: '$$', right: '$$', display: true },
+      { left: '$', right: '$', display: false }
+    ],
+    throwOnError: false
   });
 }
 </script>
