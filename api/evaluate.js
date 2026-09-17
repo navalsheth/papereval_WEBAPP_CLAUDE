@@ -11,7 +11,7 @@ export const config = {
   }
 };
 
-const GEMINI_MODEL = 'gemini-2.5-flash'; // testing: lighter/cheaper model vs gemini-3.6-flash — see README note
+const GEMINI_MODEL = 'gemini-3.6-flash'; // reverted: gemini-2.5-flash is being retired early (404s reported ahead of its official Oct 2026 shutdown)
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 const RESPONSE_SCHEMA = {
@@ -135,7 +135,7 @@ export default async function handler(req, res) {
       responseSchema: RESPONSE_SCHEMA,
       temperature: 0.1,
       maxOutputTokens: 65536,
-      thinkingConfig: { thinkingBudget: 0 } // gemini-2.5-flash uses thinkingBudget (not thinkingLevel); 0 = thinking off
+      thinkingConfig: { thinkingLevel: 'low' } // gemini-3.6-flash (Gemini 3 family) uses thinkingLevel, not thinkingBudget
     }
   };
 
