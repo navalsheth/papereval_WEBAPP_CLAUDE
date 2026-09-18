@@ -554,10 +554,11 @@ function renderOverlay(answerPageIdx){
   if (!answerPageIdx) return;
 
   currentQuestions
-    .filter(q => q.page === answerPageIdx && q.mistakeBox)
+    .filter(q => q.page === answerPageIdx && q.mistakeBox && (q.status === 'wrong' || q.status === 'partial'))
     .forEach(q => {
       const box = q.mistakeBox;
       if ([box.ymin, box.xmin, box.ymax, box.xmax].some(v => typeof v !== 'number')) return;
+      if (box.ymin === 0 && box.xmin === 0 && box.ymax === 0 && box.xmax === 0) return; // placeholder "no box"
       const left = box.xmin / 10, top = box.ymin / 10;
       const width = (box.xmax - box.xmin) / 10, height = (box.ymax - box.ymin) / 10;
 
