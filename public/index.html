@@ -110,7 +110,7 @@
   .report-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:20px;align-items:start;}
   @media (max-width:860px){ .report-grid{grid-template-columns:1fr;} .panel{display:none;} .panel.active{display:block;} }
   .panel{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
-  .panel-head{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+  .panel-head{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 12px;}
   .panel-head h2{font-size:16px;}
   .page-nav{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted);}
   .page-nav button{background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;color:var(--ink);font-size:13px;}
@@ -126,6 +126,10 @@
   .qrow-head{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;}
   .qrow-head:focus-visible{outline:2px solid var(--teal);outline-offset:-2px;}
   .qtitle{font-size:14.5px;font-weight:600;color:var(--ink);}
+  .qnum{color:var(--teal);font-weight:700;margin-right:6px;}
+  .pageset-toggle{display:flex;gap:6px;}
+  .pageset-btn{font-size:12.5px;padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--ink);cursor:pointer;font-weight:600;}
+  .pageset-btn.active{background:var(--navy);color:#fff;border-color:var(--navy);}
   .qmeta{display:flex;align-items:center;gap:10px;flex-shrink:0;}
   .pill{font-size:12.5px;font-weight:600;padding:3px 10px;border-radius:20px;white-space:nowrap;}
   .pill.correct{color:var(--correct);background:var(--correct-bg);}
@@ -166,7 +170,8 @@
       </svg>
       <span>PaperEval</span>
     </div>
-    <div class="tag">Live — Gemini</div>
+    <div class="tag" id="statusTag">Live — Gemini</div>
+    <button class="btn-secondary" id="newEvalBtn" style="display:none;">← New evaluation</button>
   </div>
 
   <section id="screen-upload" class="screen active">
@@ -226,13 +231,17 @@
       <div class="panel active" data-panel="page">
         <div class="panel-head">
           <h2 id="pageTitle">Page 1</h2>
+          <div class="pageset-toggle">
+            <button class="pageset-btn active" id="setAnswerBtn">Answer sheet</button>
+            <button class="pageset-btn" id="setQuestionBtn">Question paper</button>
+          </div>
           <div class="page-nav">
             <button id="prevPage">← Previous</button>
             <span id="pageIndicator">1 / 1</span>
             <button id="nextPage">Next →</button>
           </div>
         </div>
-        <div class="scan-wrap"><div class="scan-frame"><img id="scanImg" alt="Answer sheet page"></div></div>
+        <div class="scan-wrap"><div class="scan-frame"><img id="scanImg" alt="Page"></div></div>
       </div>
       <div class="panel active" data-panel="questions">
         <div class="panel-head"><h2>Evaluation</h2></div>
@@ -355,7 +364,13 @@ function checkReady(){
 function showScreen(id){
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
+  document.getElementById('newEvalBtn').style.display = (id === 'screen-upload') ? 'none' : 'inline-block';
 }
+
+function resetToUpload(){
+  showScreen('screen-upload');
+}
+document.getElementById('newEvalBtn').addEventListener('click', resetToUpload);
 
 document.getElementById('evalBtn').addEventListener('click', runEvaluation);
 document.getElementById('retryBtn').addEventListener('click', () => showScreen('screen-upload'));
@@ -398,7 +413,9 @@ function showError(message){
 }
 
 /* ---------- Report rendering ---------- */
-let currentPage = 1;
+let currentAnswerPageIdx = 1;
+let currentQuestionPageIdx = 1;
+let activePageSet = 'answer';
 let currentQuestions = [];
 
 const statusLabel = { correct: "Correct", wrong: "Wrong", partial: "Partially wrong", unanswered: "Unanswered" };
@@ -427,7 +444,7 @@ function buildReport(result){
   qlist.innerHTML = currentQuestions.map(q => `
     <div class="qrow" data-page="${q.page}" id="qrow-${q.id}">
       <button class="qrow-head" aria-expanded="false">
-        <span class="qtitle">${escapeHtml(q.title || ('Question ' + q.id))}</span>
+        <span class="qtitle"><span class="qnum">Q${escapeHtml(q.questionNumber ?? q.id)}</span>${escapeHtml(q.title || '')}</span>
         <span class="qmeta">
           <span class="pill ${q.status}">${statusLabel[q.status] || q.status}</span>
           <span class="chev">▸</span>
@@ -452,8 +469,27 @@ function buildReport(result){
   document.querySelectorAll('.qrow-head').forEach(btn => {
     btn.addEventListener('click', () => {
       const row = btn.closest('.qrow');
-      const open = row.classList.toggle('open');
-      btn.setAttribute('aria-expanded', open);
+      const wasOpen = row.classList.contains('open');
+
+      // Single-open accordion: close every other question first.
+      document.querySelectorAll('.qrow.open').forEach(openRow => {
+        if (openRow !== row){
+          openRow.classList.remove('open');
+          openRow.querySelector('.qrow-head').setAttribute('aria-expanded', 'false');
+        }
+      });
+
+      const nowOpen = !wasOpen;
+      row.classList.toggle('open', nowOpen);
+      btn.setAttribute('aria-expanded', nowOpen);
+
+      // Opening a question auto-expands all three of its sub-sections.
+      if (nowOpen){
+        row.querySelectorAll('.sub').forEach(sub => {
+          sub.classList.add('open');
+          sub.querySelector('.sub-head').setAttribute('aria-expanded', 'true');
+        });
+      }
     });
   });
   document.querySelectorAll('.sub-head').forEach(btn => {
@@ -464,7 +500,11 @@ function buildReport(result){
     });
   });
 
-  currentPage = 1;
+  currentAnswerPageIdx = 1;
+  currentQuestionPageIdx = 1;
+  activePageSet = 'answer';
+  document.getElementById('setAnswerBtn').classList.add('active');
+  document.getElementById('setQuestionBtn').classList.remove('active');
   renderPage();
   renderMath();
 }
@@ -488,17 +528,42 @@ function escapeHtml(str){
 }
 
 function renderPage(){
-  const total = answerPages.length || 1;
-  document.getElementById('pageTitle').textContent = `Page ${currentPage}`;
-  document.getElementById('pageIndicator').textContent = `${currentPage} / ${total}`;
+  const pages = activePageSet === 'question' ? questionPages : answerPages;
+  const idx = activePageSet === 'question' ? currentQuestionPageIdx : currentAnswerPageIdx;
+  const total = pages.length || 1;
+  const label = activePageSet === 'question' ? 'Question paper' : 'Answer sheet';
+  document.getElementById('pageTitle').textContent = `${label} — page ${idx}`;
+  document.getElementById('pageIndicator').textContent = `${idx} / ${total}`;
   const img = document.getElementById('scanImg');
-  img.src = (answerPages[currentPage-1] || {}).dataUrl || '';
-  document.getElementById('prevPage').disabled = currentPage === 1;
-  document.getElementById('nextPage').disabled = currentPage === total;
+  img.src = (pages[idx-1] || {}).dataUrl || '';
+  document.getElementById('prevPage').disabled = idx === 1;
+  document.getElementById('nextPage').disabled = idx === total;
 }
 
-document.getElementById('prevPage').addEventListener('click', () => { if(currentPage>1){ currentPage--; renderPage(); } });
-document.getElementById('nextPage').addEventListener('click', () => { if(currentPage<answerPages.length){ currentPage++; renderPage(); } });
+document.getElementById('prevPage').addEventListener('click', () => {
+  if (activePageSet === 'question'){ if(currentQuestionPageIdx>1) currentQuestionPageIdx--; }
+  else { if(currentAnswerPageIdx>1) currentAnswerPageIdx--; }
+  renderPage();
+});
+document.getElementById('nextPage').addEventListener('click', () => {
+  const total = (activePageSet === 'question' ? questionPages : answerPages).length;
+  if (activePageSet === 'question'){ if(currentQuestionPageIdx<total) currentQuestionPageIdx++; }
+  else { if(currentAnswerPageIdx<total) currentAnswerPageIdx++; }
+  renderPage();
+});
+
+document.getElementById('setAnswerBtn').addEventListener('click', () => {
+  activePageSet = 'answer';
+  document.getElementById('setAnswerBtn').classList.add('active');
+  document.getElementById('setQuestionBtn').classList.remove('active');
+  renderPage();
+});
+document.getElementById('setQuestionBtn').addEventListener('click', () => {
+  activePageSet = 'question';
+  document.getElementById('setQuestionBtn').classList.add('active');
+  document.getElementById('setAnswerBtn').classList.remove('active');
+  renderPage();
+});
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
