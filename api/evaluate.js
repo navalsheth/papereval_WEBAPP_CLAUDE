@@ -70,8 +70,9 @@ const RESPONSE_SCHEMA = {
               ymax: { type: 'INTEGER' },
               xmax: { type: 'INTEGER' }
             },
+            required: ['ymin', 'xmin', 'ymax', 'xmax'],
             description:
-              'EXPERIMENTAL: a tight bounding box around the specific line/step on the answer-sheet PAGE IMAGE (the page given in "page") where the mistake is written, so it can be circled for the student. Use normalized 0-1000 coordinates relative to that image, [ymin, xmin, ymax, xmax], where (0,0) is the top-left corner and (1000,1000) is the bottom-right corner of that page image. Omit entirely if correct or unanswered, or if you are not confident of the exact location.'
+              'EXPERIMENTAL: a bounding box on the answer-sheet PAGE IMAGE (the page given in "page") in normalized 0-1000 coordinates [ymin, xmin, ymax, xmax], (0,0)=top-left, (1000,1000)=bottom-right. For status "wrong" or "partial": your best-effort tight box around the mistake line — always attempt a real estimate, never skip this. For status "correct" or "unanswered": always set every value to 0.'
           },
           correctSolution: {
             type: 'ARRAY',
@@ -80,7 +81,7 @@ const RESPONSE_SCHEMA = {
               'The COMPLETE correct solution as a sequence of steps (same style as written[]) — every step of a proper method, not just the final answer. The last item should state the final answer clearly.'
           }
         },
-        required: ['id', 'questionNumber', 'page', 'title', 'status', 'written', 'correctSolution']
+        required: ['id', 'questionNumber', 'page', 'title', 'status', 'written', 'correctSolution', 'mistakeBox']
       }
     }
   },
@@ -100,7 +101,7 @@ Non-negotiable rules:
    - "partial": some correct steps followed by an error, or a correct method with a minor slip.
    - "unanswered": left blank.
 6. For "wrong" and "partial", identify the exact step (1-based index into written[]) where the first mistake occurs, quote what was written there in mistakeWrong, and give what it should have been in mistakeCorrect.
-7. For every "wrong" or "partial" question, you MUST also give "mistakeBox" — a tight bounding box around the mistake line, in normalized 0-1000 coordinates [ymin, xmin, ymax, xmax] relative to that specific page image. Locating handwritten lines on a page is a standard, learnable task — always give your single best-estimate box; do not skip this field.
+7. "mistakeBox" is REQUIRED on every question — never omit it. For "wrong" or "partial": give your best-effort tight box around the mistake line, in normalized 0-1000 coordinates [ymin, xmin, ymax, xmax]; always attempt a real estimate, never skip it. For "correct" or "unanswered": set ymin, xmin, ymax, xmax all to 0.
 8. "correctSolution" must be the COMPLETE worked solution, step by step, like a model answer a teacher would write — never just the final result on its own.
 9. "questionNumber" must be copied exactly as the student labeled it on the answer sheet (their own numbering, e.g. "18" or "2(a)") — this is what the student sees on their own page, so it must match exactly, not a tidied-up sequence.
 10. Page numbers must match the order the answer sheet pages were provided in, starting at 1.
@@ -201,10 +202,13 @@ export default async function handler(req, res) {
     }
 
     // TEMP DEBUG (v1.2 experiment): confirm whether Gemini is actually
-    // returning mistakeBox coordinates. Check this in Vercel → Logs.
+    // returning non-zero mistakeBox coordinates. Check this in Vercel → Logs.
     const mistakesTotal = (result.questions || []).filter(q => q.status === 'wrong' || q.status === 'partial').length;
-    const boxesReturned = (result.questions || []).filter(q => q.mistakeBox).length;
-    console.log(`mistakeBox debug: ${boxesReturned}/${mistakesTotal} wrong/partial questions had a mistakeBox`);
+    const boxesReturned = (result.questions || []).filter(q => {
+      const b = q.mistakeBox;
+      return b && (b.ymin || b.xmin || b.ymax || b.xmax) && (q.status === 'wrong' || q.status === 'partial');
+    }).length;
+    console.log(`mistakeBox debug: ${boxesReturned}/${mistakesTotal} wrong/partial questions had a non-zero mistakeBox`);
 
     res.status(200).json(result);
   } catch (err) {
