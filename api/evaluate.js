@@ -100,7 +100,7 @@ Non-negotiable rules:
    - "partial": some correct steps followed by an error, or a correct method with a minor slip.
    - "unanswered": left blank.
 6. For "wrong" and "partial", identify the exact step (1-based index into written[]) where the first mistake occurs, quote what was written there in mistakeWrong, and give what it should have been in mistakeCorrect.
-7. When you can clearly see WHERE on the page image the mistake line is written, also give "mistakeBox" — a tight bounding box around just that line, in normalized 0-1000 coordinates [ymin, xmin, ymax, xmax] relative to that specific page image. If you are not confident of the exact position, omit mistakeBox entirely rather than guessing.
+7. For every "wrong" or "partial" question, you MUST also give "mistakeBox" — a tight bounding box around the mistake line, in normalized 0-1000 coordinates [ymin, xmin, ymax, xmax] relative to that specific page image. Locating handwritten lines on a page is a standard, learnable task — always give your single best-estimate box; do not skip this field.
 8. "correctSolution" must be the COMPLETE worked solution, step by step, like a model answer a teacher would write — never just the final result on its own.
 9. "questionNumber" must be copied exactly as the student labeled it on the answer sheet (their own numbering, e.g. "18" or "2(a)") — this is what the student sees on their own page, so it must match exactly, not a tidied-up sequence.
 10. Page numbers must match the order the answer sheet pages were provided in, starting at 1.
@@ -199,6 +199,12 @@ export default async function handler(req, res) {
     if (typeof declaredTotal === 'number' && declaredTotal !== actualCount) {
       result.incomplete = true;
     }
+
+    // TEMP DEBUG (v1.2 experiment): confirm whether Gemini is actually
+    // returning mistakeBox coordinates. Check this in Vercel → Logs.
+    const mistakesTotal = (result.questions || []).filter(q => q.status === 'wrong' || q.status === 'partial').length;
+    const boxesReturned = (result.questions || []).filter(q => q.mistakeBox).length;
+    console.log(`mistakeBox debug: ${boxesReturned}/${mistakesTotal} wrong/partial questions had a mistakeBox`);
 
     res.status(200).json(result);
   } catch (err) {
