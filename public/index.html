@@ -118,7 +118,11 @@
 
   .scan-wrap{padding:16px;}
   .scan-frame{border-left:2px solid var(--margin-red);border-radius:6px;box-shadow:0 8px 24px rgba(16,38,58,0.14);padding:10px;background:var(--card);}
+  .scan-img-wrap{position:relative;}
   .scan-frame img{display:block;width:100%;border-radius:2px;}
+  .overlay-layer{position:absolute;inset:0;pointer-events:none;}
+  .overlay-mark{position:absolute;border:2.5px solid #E11D2E;border-radius:5px;box-shadow:0 0 0 1.5px rgba(255,255,255,0.85);}
+  .overlay-badge{position:absolute;background:#E11D2E;color:#fff;font-size:11px;font-weight:700;min-width:20px;height:20px;padding:0 5px;border-radius:10px;display:flex;align-items:center;justify-content:center;transform:translate(-50%,-50%);box-shadow:0 1px 4px rgba(0,0,0,0.35);font-family:'Inter',sans-serif;}
 
   .qlist{max-height:640px;overflow-y:auto;}
   .qrow{border-bottom:1px solid var(--border);}
@@ -241,7 +245,7 @@
             <button id="nextPage">Next →</button>
           </div>
         </div>
-        <div class="scan-wrap"><div class="scan-frame"><img id="scanImg" alt="Page"></div></div>
+        <div class="scan-wrap"><div class="scan-frame"><div class="scan-img-wrap"><img id="scanImg" alt="Page"><div class="overlay-layer" id="overlayLayer"></div></div></div></div>
       </div>
       <div class="panel active" data-panel="questions">
         <div class="panel-head"><h2>Evaluation</h2></div>
@@ -538,6 +542,40 @@ function renderPage(){
   img.src = (pages[idx-1] || {}).dataUrl || '';
   document.getElementById('prevPage').disabled = idx === 1;
   document.getElementById('nextPage').disabled = idx === total;
+  renderOverlay(activePageSet === 'answer' ? idx : null);
+}
+
+// EXPERIMENTAL — marking overlay. Draws a red box + question-number badge on
+// the answer-sheet page image at the mistake's reported location. Safe to
+// delete this whole function (and its call above) to roll back to v1.1.
+function renderOverlay(answerPageIdx){
+  const layer = document.getElementById('overlayLayer');
+  layer.innerHTML = '';
+  if (!answerPageIdx) return;
+
+  currentQuestions
+    .filter(q => q.page === answerPageIdx && q.mistakeBox)
+    .forEach(q => {
+      const box = q.mistakeBox;
+      if ([box.ymin, box.xmin, box.ymax, box.xmax].some(v => typeof v !== 'number')) return;
+      const left = box.xmin / 10, top = box.ymin / 10;
+      const width = (box.xmax - box.xmin) / 10, height = (box.ymax - box.ymin) / 10;
+
+      const mark = document.createElement('div');
+      mark.className = 'overlay-mark';
+      mark.style.left = left + '%';
+      mark.style.top = top + '%';
+      mark.style.width = width + '%';
+      mark.style.height = height + '%';
+      layer.appendChild(mark);
+
+      const badge = document.createElement('div');
+      badge.className = 'overlay-badge';
+      badge.textContent = 'Q' + (q.questionNumber ?? q.id);
+      badge.style.left = left + '%';
+      badge.style.top = top + '%';
+      layer.appendChild(badge);
+    });
 }
 
 document.getElementById('prevPage').addEventListener('click', () => {
