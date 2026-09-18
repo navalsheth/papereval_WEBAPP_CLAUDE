@@ -62,6 +62,17 @@ const RESPONSE_SCHEMA = {
             type: 'STRING',
             description: 'What that line should be, in LaTeX. Omit if correct or unanswered.'
           },
+          mistakeBox: {
+            type: 'OBJECT',
+            properties: {
+              ymin: { type: 'INTEGER' },
+              xmin: { type: 'INTEGER' },
+              ymax: { type: 'INTEGER' },
+              xmax: { type: 'INTEGER' }
+            },
+            description:
+              'EXPERIMENTAL: a tight bounding box around the specific line/step on the answer-sheet PAGE IMAGE (the page given in "page") where the mistake is written, so it can be circled for the student. Use normalized 0-1000 coordinates relative to that image, [ymin, xmin, ymax, xmax], where (0,0) is the top-left corner and (1000,1000) is the bottom-right corner of that page image. Omit entirely if correct or unanswered, or if you are not confident of the exact location.'
+          },
           correctSolution: {
             type: 'ARRAY',
             items: { type: 'STRING' },
@@ -89,12 +100,13 @@ Non-negotiable rules:
    - "partial": some correct steps followed by an error, or a correct method with a minor slip.
    - "unanswered": left blank.
 6. For "wrong" and "partial", identify the exact step (1-based index into written[]) where the first mistake occurs, quote what was written there in mistakeWrong, and give what it should have been in mistakeCorrect.
-7. "correctSolution" must be the COMPLETE worked solution, step by step, like a model answer a teacher would write — never just the final result on its own.
-8. "questionNumber" must be copied exactly as the student labeled it on the answer sheet (their own numbering, e.g. "18" or "2(a)") — this is what the student sees on their own page, so it must match exactly, not a tidied-up sequence.
-9. Page numbers must match the order the answer sheet pages were provided in, starting at 1.
-10. You MUST include every single question that appears on the question paper as one entry in "questions" — never stop partway through. "totals.total" must always exactly equal the number of items in "questions".
-11. Keep every field strictly to its content — the question, the working, the mistake, the solution. Never include comments about your own output, formatting notes, apologies, or any meta text of any kind in any field.
-12. Return ONLY JSON matching the provided schema — no prose, no markdown fences, no commentary outside the JSON.`;
+7. When you can clearly see WHERE on the page image the mistake line is written, also give "mistakeBox" — a tight bounding box around just that line, in normalized 0-1000 coordinates [ymin, xmin, ymax, xmax] relative to that specific page image. If you are not confident of the exact position, omit mistakeBox entirely rather than guessing.
+8. "correctSolution" must be the COMPLETE worked solution, step by step, like a model answer a teacher would write — never just the final result on its own.
+9. "questionNumber" must be copied exactly as the student labeled it on the answer sheet (their own numbering, e.g. "18" or "2(a)") — this is what the student sees on their own page, so it must match exactly, not a tidied-up sequence.
+10. Page numbers must match the order the answer sheet pages were provided in, starting at 1.
+11. You MUST include every single question that appears on the question paper as one entry in "questions" — never stop partway through. "totals.total" must always exactly equal the number of items in "questions".
+12. Keep every field strictly to its content — the question, the working, the mistake, the solution. Never include comments about your own output, formatting notes, apologies, or any meta text of any kind in any field.
+13. Return ONLY JSON matching the provided schema — no prose, no markdown fences, no commentary outside the JSON.`;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
