@@ -34,6 +34,10 @@ const RESPONSE_SCHEMA = {
         type: 'OBJECT',
         properties: {
           id: { type: 'INTEGER' },
+          questionNumber: {
+            type: 'STRING',
+            description: "The question's number/label exactly as the student wrote it next to their answer on the answer sheet (e.g. \"1\", \"18\", \"20\", \"2(a)\") — not a re-sequenced count, copy the actual label as written."
+          },
           page: {
             type: 'INTEGER',
             description: '1-based page number within the answer sheet where this question is attempted.'
@@ -65,7 +69,7 @@ const RESPONSE_SCHEMA = {
               'The COMPLETE correct solution as a sequence of steps (same style as written[]) — every step of a proper method, not just the final answer. The last item should state the final answer clearly.'
           }
         },
-        required: ['id', 'page', 'title', 'status', 'written', 'correctSolution']
+        required: ['id', 'questionNumber', 'page', 'title', 'status', 'written', 'correctSolution']
       }
     }
   },
@@ -86,10 +90,11 @@ Non-negotiable rules:
    - "unanswered": left blank.
 6. For "wrong" and "partial", identify the exact step (1-based index into written[]) where the first mistake occurs, quote what was written there in mistakeWrong, and give what it should have been in mistakeCorrect.
 7. "correctSolution" must be the COMPLETE worked solution, step by step, like a model answer a teacher would write — never just the final result on its own.
-8. Page numbers must match the order the answer sheet pages were provided in, starting at 1.
-9. You MUST include every single question that appears on the question paper as one entry in "questions" — never stop partway through. "totals.total" must always exactly equal the number of items in "questions".
-10. Keep every field strictly to its content — the question, the working, the mistake, the solution. Never include comments about your own output, formatting notes, apologies, or any meta text of any kind in any field.
-11. Return ONLY JSON matching the provided schema — no prose, no markdown fences, no commentary outside the JSON.`;
+8. "questionNumber" must be copied exactly as the student labeled it on the answer sheet (their own numbering, e.g. "18" or "2(a)") — this is what the student sees on their own page, so it must match exactly, not a tidied-up sequence.
+9. Page numbers must match the order the answer sheet pages were provided in, starting at 1.
+10. You MUST include every single question that appears on the question paper as one entry in "questions" — never stop partway through. "totals.total" must always exactly equal the number of items in "questions".
+11. Keep every field strictly to its content — the question, the working, the mistake, the solution. Never include comments about your own output, formatting notes, apologies, or any meta text of any kind in any field.
+12. Return ONLY JSON matching the provided schema — no prose, no markdown fences, no commentary outside the JSON.`;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
