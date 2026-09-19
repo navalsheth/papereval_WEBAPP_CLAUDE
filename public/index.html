@@ -379,36 +379,98 @@ document.getElementById('newEvalBtn').addEventListener('click', resetToUpload);
 document.getElementById('evalBtn').addEventListener('click', runEvaluation);
 document.getElementById('retryBtn').addEventListener('click', () => showScreen('screen-upload'));
 
+function buildAnswerSheetBatches(){
+  // Overlapping page-pairs so a question split across a page boundary is
+  // always fully visible together in at least one batch. E.g. pages
+  // [1,2,3,4] -> batches [1,2], [2,3], [3,4]. A single-page sheet is just
+  // one batch of one page.
+  const n = answerPages.length;
+  if (n <= 1) return [[1]];
+  const batches = [];
+  for (let i = 1; i < n; i++) batches.push([i, i + 1]);
+  return batches;
+}
+
 async function runEvaluation(){
   showScreen('screen-loading');
-  const msgs = ['Uploading pages…','Reading the question paper…','Matching answers to questions…','Checking each step of the working…','Preparing the report…'];
-  let i = 0;
+  const batches = buildAnswerSheetBatches();
+  const totalBatches = batches.length;
+  let completed = 0;
   const msgEl = document.getElementById('loadingMsg');
-  msgEl.textContent = msgs[0];
-  const timer = setInterval(() => { i = Math.min(i+1, msgs.length-1); msgEl.textContent = msgs[i]; }, 1800);
+  msgEl.textContent = totalBatches > 1
+    ? `Grading pages — 0 of ${totalBatches} groups done…`
+    : 'Reading and grading the paper…';
 
-  try{
-    const res = await fetch('/api/evaluate', {
+  const questionPaperPayload = questionPages.map(p => ({ mimeType: p.mimeType, data: p.data }));
+
+  const batchPromises = batches.map(pageIndices =>
+    fetch('/api/evaluate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        questionPaperPages: questionPages.map(p => ({ mimeType: p.mimeType, data: p.data })),
-        answerSheetPages: answerPages.map(p => ({ mimeType: p.mimeType, data: p.data }))
+        questionPaperPages: questionPaperPayload,
+        answerSheetPages: pageIndices.map(pn => ({
+          mimeType: answerPages[pn - 1].mimeType,
+          data: answerPages[pn - 1].data,
+          pageNumber: pn
+        })),
+        answerSheetTotalPages: answerPages.length
       })
-    });
-    const json = await res.json();
-    clearInterval(timer);
-    if (!res.ok){
-      showError(json.error || 'The evaluation service returned an error.');
+    })
+      .then(async res => {
+        const json = await res.json();
+        completed++;
+        if (totalBatches > 1) msgEl.textContent = `Grading pages — ${completed} of ${totalBatches} groups done…`;
+        if (!res.ok) throw new Error(json.error || `Grading failed for pages ${pageIndices.join(', ')}.`);
+        return json.questions || [];
+      })
+  );
+
+  try{
+    const batchResults = await Promise.all(batchPromises);
+    const merged = mergeBatchQuestions(batchResults.flat());
+    if (merged.length === 0){
+      showError('No questions could be graded. Try clearer scans, or check that the right files were uploaded.');
       return;
     }
-    buildReport(json);
+    buildReport(merged);
     showScreen('screen-report');
   } catch(err){
-    clearInterval(timer);
     console.error(err);
-    showError('Could not reach the evaluation service. Check your connection and try again.');
+    showError(err.message || 'Could not reach the evaluation service. Check your connection and try again.');
   }
+}
+
+// Two batches can both see the same question (it's on their shared
+// overlap page). Keep one copy per questionNumber — prefer whichever
+// version has more written steps (a cut-off view would have fewer).
+function mergeBatchQuestions(allQuestions){
+  const byNumber = new Map();
+  for (const q of allQuestions){
+    const key = String(q.questionNumber ?? q.id);
+    const existing = byNumber.get(key);
+    if (!existing){
+      byNumber.set(key, q);
+      continue;
+    }
+    const existingLen = (existing.written || []).length;
+    const newLen = (q.written || []).length;
+    const existingIsAnswered = existing.status !== 'unanswered';
+    const newIsAnswered = q.status !== 'unanswered';
+    if ((newIsAnswered && !existingIsAnswered) || newLen > existingLen){
+      byNumber.set(key, q);
+    }
+  }
+  const merged = Array.from(byNumber.values());
+  // Natural sort by the leading number in questionNumber (falls back to page order).
+  merged.sort((a, b) => {
+    const na = parseInt(String(a.questionNumber), 10);
+    const nb = parseInt(String(b.questionNumber), 10);
+    if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+    return (a.page || 0) - (b.page || 0);
+  });
+  merged.forEach((q, idx) => { q.id = idx + 1; }); // fresh, collision-free ids
+  return merged;
 }
 
 function showError(message){
@@ -424,17 +486,17 @@ let currentQuestions = [];
 
 const statusLabel = { correct: "Correct", wrong: "Wrong", partial: "Partially wrong", unanswered: "Unanswered" };
 
-function buildReport(result){
-  currentQuestions = result.questions || [];
-  const totals = result.totals || { total: currentQuestions.length, correct:0, wrong:0, partial:0, unanswered:0 };
+function buildReport(questions){
+  currentQuestions = questions || [];
+  const totals = {
+    total: currentQuestions.length,
+    correct: currentQuestions.filter(q => q.status === 'correct').length,
+    wrong: currentQuestions.filter(q => q.status === 'wrong').length,
+    partial: currentQuestions.filter(q => q.status === 'partial').length,
+    unanswered: currentQuestions.filter(q => q.status === 'unanswered').length
+  };
 
-  const banner = document.getElementById('warningBanner');
-  if (result.incomplete){
-    banner.style.display = 'block';
-    banner.textContent = `Only ${currentQuestions.length} of ${totals.total} questions came back fully graded. This can happen on long papers — try again, or split the answer sheet into smaller batches.`;
-  } else {
-    banner.style.display = 'none';
-  }
+  document.getElementById('warningBanner').style.display = 'none';
 
   document.getElementById('statsBar').innerHTML = `
     <div class="stat"><div class="num">${totals.total}</div><div class="label">Total questions</div></div>
