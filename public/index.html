@@ -196,7 +196,7 @@
           <input type="file" id="file2" accept=".pdf,image/*" multiple>
           <div class="dz-icon">✍️</div>
           <div class="dz-title">Answer sheet</div>
-          <div class="dz-sub">PDF or photos, in page order</div>
+          <div class="dz-sub">PDF, or one photo per page, in page order</div>
           <div class="dz-file" id="dz2-name"></div>
         </label>
       </div>
@@ -205,7 +205,7 @@
         <span class="hint" id="evalHint">Add both files to continue</span>
       </div>
     </div>
-    <p class="footnote">Files are compressed in your browser before upload and evaluated by Gemini through a server-side key — the key never reaches this page.</p>
+    <p class="footnote">Upload each page as its own photo (don't combine several pages into one image) — this keeps grading accurate on longer papers. Files are compressed in your browser before upload and evaluated by Gemini through a server-side key — the key never reaches this page.</p>
   </section>
 
   <section id="screen-loading" class="screen">
@@ -510,7 +510,7 @@ function buildReport(questions){
   qlist.innerHTML = currentQuestions.map(q => `
     <div class="qrow" data-page="${q.page}" id="qrow-${q.id}">
       <button class="qrow-head" aria-expanded="false">
-        <span class="qtitle"><span class="qnum">Q${escapeHtml(q.questionNumber ?? q.id)}</span>${escapeHtml(q.title || '')}</span>
+        <span class="qtitle"><span class="qnum">Q${escapeHtml(String(q.questionNumber ?? q.id).replace(/^[Qq]\s*/, ''))}</span>${escapeHtml(q.title || '')}</span>
         <span class="qmeta">
           <span class="pill ${q.status}">${statusLabel[q.status] || q.status}</span>
           <span class="chev">▸</span>
