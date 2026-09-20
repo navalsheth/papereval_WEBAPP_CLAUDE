@@ -106,7 +106,7 @@ Non-negotiable rules for every question you DO include:
 6. For "wrong" and "partial", identify the exact step (1-based index into written[]) where the first mistake occurs, quote what was written there in mistakeWrong, and give what it should have been in mistakeCorrect.
 7. "mistakeBox" is REQUIRED on every question — never omit it. For "wrong"/"partial": give your best-effort tight box around the mistake line, in normalized 0-1000 coordinates; always attempt a real estimate. For "correct"/"unanswered": set every value to 0.
 8. "correctSolution" must be the COMPLETE worked solution, step by step, like a model answer a teacher would write — never just the final result on its own.
-9. "questionNumber" must be copied exactly as the student labeled it on the answer sheet (their own numbering, e.g. "18" or "2(a)") — not a tidied-up sequence.
+9. "questionNumber" must be copied exactly as the student labeled it on the answer sheet, but WITHOUT any leading "Q" — just the number/label itself (e.g. "1", "18", "2(a)"), even if the student wrote a "Q" before it. The app adds its own "Q" prefix when displaying it.
 10. "page" must be the TRUE page number given to you for each image below, not a 1/2 count of how many images were in this call.
 11. Keep every field strictly to its content. Never include comments about your own output, formatting notes, apologies, or any meta text of any kind in any field.
 12. Return ONLY JSON matching the provided schema — no prose, no markdown fences, no commentary outside the JSON.`;
