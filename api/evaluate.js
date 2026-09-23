@@ -55,6 +55,10 @@ const RESPONSE_SCHEMA = {
             type: 'STRING',
             description: 'What that line should be, in LaTeX. Omit if correct or unanswered.'
           },
+          markPage: {
+            type: 'INTEGER',
+            description: 'The TRUE page number that "mistakeBox" is drawn on — i.e. the page whose image actually shows the specific content the box points to. For most questions this is identical to "page". They DIFFER only when a question\'s working spans a page break (see CONTINUATIONS ACROSS A PAGE BREAK above): "page" stays the page where the question started, but if the exact content being boxed (the mistake line / final answer / blank space) is physically on the following page instead, set "markPage" to THAT page. Getting this right matters — mistakeBox\'s coordinates are only meaningful on the one page image they were read from; placing them under the wrong page number puts the mark in a visually plausible but wrong spot on a different page.'
+          },
           mistakeBox: {
             type: 'OBJECT',
             properties: {
@@ -65,7 +69,7 @@ const RESPONSE_SCHEMA = {
             },
             required: ['ymin', 'xmin', 'ymax', 'xmax'],
             description:
-              'A bounding box on the answer-sheet PAGE IMAGE (the true page given in "page") in normalized 0-1000 coordinates [ymin, xmin, ymax, xmax], (0,0)=top-left, (1000,1000)=bottom-right. REQUIRED on every question, and it must always be a real best-effort estimate — never all zeros, for any status. What to box: "wrong"/"partial" → the specific mistake line (the same step written[mistakeStep-1] points to) — look at the actual ink of THAT line and box only it, never the question\'s number/label, never the problem statement, and never a different line. "correct" → the final answer/result line of the student\'s working. "unanswered" → the blank space where the student should have written an answer, just below/after the question\'s problem statement — estimate this even though nothing is written there. In every case, look carefully at where that specific content actually sits on the page before answering — a box in the wrong place is worse than a slightly loose one in the right place.'
+              'A bounding box, in normalized 0-1000 coordinates [ymin, xmin, ymax, xmax] (0,0)=top-left, (1000,1000)=bottom-right, on the ONE specific page image named in "markPage" (not necessarily the same page as "page" — see markPage). REQUIRED on every question, and it must always be a real best-effort estimate — never all zeros, for any status. What to box: "wrong"/"partial" → the specific mistake line (the same step written[mistakeStep-1] points to) — look at the actual ink of THAT line and box only it, never the question\'s number/label, never the problem statement, and never a different line. "correct" → the final answer/result line of the student\'s working. "unanswered" → the blank space where the student should have written an answer, just below/after the question\'s problem statement — estimate this even though nothing is written there. In every case, look carefully at where that specific content actually sits on the page before answering — a box in the wrong place is worse than a slightly loose one in the right place.'
           },
           correctSolution: {
             type: 'ARRAY',
@@ -74,7 +78,7 @@ const RESPONSE_SCHEMA = {
               'The COMPLETE correct solution as a sequence of steps (same style as written[]) — every step of a proper method, not just the final answer. The last item should state the final answer clearly.'
           }
         },
-        required: ['id', 'questionNumber', 'page', 'title', 'status', 'written', 'correctSolution', 'mistakeBox', 'mistakeStep']
+        required: ['id', 'questionNumber', 'page', 'title', 'status', 'written', 'correctSolution', 'mistakeBox', 'mistakeStep', 'markPage']
       }
     }
   },
@@ -92,6 +96,7 @@ IMPORTANT — you are only being shown SOME of the answer sheet's pages in this 
 - Also skip any question that doesn't appear at all on the pages you were given.
 - It is completely normal and expected for you to return only some of the answer sheet's questions in this call — do not try to cover the whole paper.
 - CONTINUATIONS ACROSS A PAGE BREAK: a student's working for one question often ends near the bottom of one page and picks back up at the very TOP of the next page with no question number rewritten there — because they never stopped, they just ran out of room. When a page you were given opens with math/working that has no question number above it, no blank gap before it, and clearly carries on the same calculation as whatever was last happening at the bottom of the previous page you can see (same variable, same method, no new question text) — treat that opening content as belonging to that SAME, most recently seen question number. Append it to that question's "written" steps in the correct order. Do NOT invent a new unlabeled question for it, and do NOT silently drop it — an unlabeled continuation you can now see in full is exactly the case this batching is designed to let you complete.
+  - IMPORTANT for such spanning questions: "page" still stays the page where the question STARTED (where its number was written). But if the mistake/final-answer/blank line that "mistakeBox" needs to point to is part of the continuation on the LATER page, you must set "markPage" to that later page — not "page". Mixing these up puts the mark in the right-looking spot on the wrong page's image.
 
 Non-negotiable rules for every question you DO include:
 1. In "written", reproduce EXACTLY what the student wrote — every step, in their own notation. Do not correct spelling, do not fill in missing steps, do not "clean up" their working. Never invent a step they did not write.
@@ -108,7 +113,7 @@ Non-negotiable rules for every question you DO include:
 13. NEVER repeat the same character, token, or short phrase more than a few times in a row in any field. If you notice yourself about to repeat something instead of making progress, STOP that field immediately — write "<unclear>" and move on to the next field or question rather than continuing. A field that trails into repetition is worse than a shorter, honest one.
 8. "correctSolution" must be the COMPLETE worked solution, step by step, like a model answer a teacher would write — never just the final result on its own.
 9. "questionNumber" must be copied exactly as the student labeled it on the answer sheet, but WITHOUT any leading "Q" — just the number/label itself (e.g. "1", "18", "2(a)"), even if the student wrote a "Q" before it. The app adds its own "Q" prefix when displaying it.
-10. "page" must be the TRUE page number given to you for each image below, not a 1/2 count of how many images were in this call.
+10. "page" must be the TRUE page number given to you for each image below, not a 1/2 count of how many images were in this call. "markPage" must be the TRUE page number of whichever image the "mistakeBox" content is actually visible on — equal to "page" unless this is a page-spanning question and the boxed content is on the later page (see CONTINUATIONS above).
 11. Keep every field strictly to its content. Never include comments about your own output, formatting notes, apologies, or any meta text of any kind in any field.
 12. Return ONLY JSON matching the provided schema — no prose, no markdown fences, no commentary outside the JSON.`;
 
