@@ -165,6 +165,7 @@
   .qrow-head:focus-visible{outline:2px solid var(--teal);outline-offset:-2px;}
   .qtitle{font-size:14.5px;font-weight:600;color:var(--ink);}
   .qnum{color:var(--teal);font-weight:700;margin-right:6px;}
+  .qnum-page{color:var(--muted);font-weight:500;font-size:12px;margin-right:6px;}
   .pageset-toggle{display:flex;gap:6px;}
   .pageset-btn{font-size:12.5px;padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--ink);cursor:pointer;font-weight:600;}
   .pageset-btn.active{background:var(--navy);color:#fff;border-color:var(--navy);}
@@ -174,6 +175,7 @@
   .pill.wrong{color:var(--wrong);background:var(--wrong-bg);}
   .pill.partial{color:var(--partial);background:var(--partial-bg);}
   .pill.unanswered{color:var(--unanswered);background:var(--unanswered-bg);}
+  .pill.conflict{color:#92610a;background:#fef3c7;border:1px dashed #d97706;}
   .chev{transition:transform .15s ease;color:var(--muted);}
   .qrow.open .chev{transform:rotate(90deg);}
   .qbody{display:none;padding:0 16px 16px;}
@@ -640,30 +642,59 @@ function normalizeQNumber(raw){
     .replace(/^0+(?=\d)/, '');
 }
 
+// Two entries are the SAME question — and should be merged into one — only
+// if they share a normalized number AND appear on the same or an adjacent
+// page. The page check matters because some papers restart numbering in a
+// later section (e.g. a second "Q1" many pages later); without it, that
+// unrelated later Q1 would wrongly collapse into the first one and erase it.
 function mergeBatchQuestions(allQuestions){
-  const byNumber = new Map();
+  const byNumber = new Map(); // normalized number -> array of {refPage, items[]}
   for (const q of allQuestions){
     const key = normalizeQNumber(q.questionNumber ?? q.id);
-    const existing = byNumber.get(key);
-    if (!existing){
-      byNumber.set(key, q);
-      continue;
+    const qPage = q.page || 0;
+    const clusters = byNumber.get(key) || [];
+    let cluster = clusters.find(c => Math.abs(c.refPage - qPage) <= 1);
+    if (!cluster){
+      cluster = { refPage: qPage, items: [] };
+      clusters.push(cluster);
     }
-    const existingLen = (existing.written || []).length;
-    const newLen = (q.written || []).length;
-    const existingIsAnswered = existing.status !== 'unanswered';
-    const newIsAnswered = q.status !== 'unanswered';
-    if ((newIsAnswered && !existingIsAnswered) || newLen > existingLen){
-      byNumber.set(key, q);
+    cluster.items.push(q);
+    cluster.refPage = qPage; // slide the reference page forward as we go
+    byNumber.set(key, clusters);
+  }
+
+  const merged = [];
+  for (const clusters of byNumber.values()){
+    for (const cluster of clusters){
+      const items = cluster.items;
+      let best = items[0];
+      for (let i = 1; i < items.length; i++){
+        const q = items[i];
+        const bestLen = (best.written || []).length;
+        const newLen = (q.written || []).length;
+        const bestIsAnswered = best.status !== 'unanswered';
+        const newIsAnswered = q.status !== 'unanswered';
+        if ((newIsAnswered && !bestIsAnswered) || newLen > bestLen){
+          best = q;
+        }
+      }
+      // Same question, seen more than once, but graded differently across
+      // batches — don't silently trust whichever one won the tie-break.
+      // Flag it so the teacher knows to double-check this one specifically.
+      const statuses = new Set(items.map(q => q.status));
+      merged.push(statuses.size > 1 ? { ...best, _conflicting: true } : best);
     }
   }
-  const merged = Array.from(byNumber.values());
-  // Natural sort by the leading number in questionNumber (falls back to page order).
+
+  // Sort by page first (true document order) — question numbers alone
+  // aren't a safe global order once a paper restarts numbering mid-way.
   merged.sort((a, b) => {
+    const pageDiff = (a.page || 0) - (b.page || 0);
+    if (pageDiff !== 0) return pageDiff;
     const na = parseInt(String(a.questionNumber), 10);
     const nb = parseInt(String(b.questionNumber), 10);
     if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
-    return (a.page || 0) - (b.page || 0);
+    return 0;
   });
   merged.forEach((q, idx) => { q.id = idx + 1; }); // fresh, collision-free ids
   return merged;
@@ -730,11 +761,27 @@ function renderQlist(){
     return;
   }
 
-  qlist.innerHTML = visible.map(q => `
+  // Some papers reuse question numbers in a later section (e.g. a second
+  // "Q1" several pages later) — those are correctly kept as separate
+  // questions now, but they'd look like an unexplained duplicate in the
+  // full list without something to tell them apart. Tag with the page
+  // number, but only when a number is genuinely shared, to avoid clutter
+  // on the (much more common) paper that never repeats a number.
+  const numberCounts = {};
+  currentQuestions.forEach(q => {
+    const key = normalizeQNumber(q.questionNumber ?? q.id);
+    numberCounts[key] = (numberCounts[key] || 0) + 1;
+  });
+
+  qlist.innerHTML = visible.map(q => {
+    const key = normalizeQNumber(q.questionNumber ?? q.id);
+    const pageTag = numberCounts[key] > 1 ? `<span class="qnum-page">(page ${q.page})</span>` : '';
+    return `
     <div class="qrow" data-page="${q.page}" id="qrow-${q.id}">
       <button class="qrow-head" aria-expanded="false">
-        <span class="qtitle"><span class="qnum">Q${escapeHtml(String(q.questionNumber ?? q.id).replace(/^[Qq]\s*/, ''))}</span>${escapeHtml(q.title || '')}</span>
+        <span class="qtitle"><span class="qnum">Q${escapeHtml(String(q.questionNumber ?? q.id).replace(/^[Qq]\s*/, ''))}</span>${pageTag}${escapeHtml(q.title || '')}</span>
         <span class="qmeta">
+          ${q._conflicting ? `<span class="pill conflict" title="Graded differently across two passes — please double-check this one">⚠ Review</span>` : ''}
           <span class="pill ${q.status}">${statusLabel[q.status] || q.status}</span>
           <span class="chev">▸</span>
         </span>
@@ -753,7 +800,8 @@ function renderQlist(){
                      : `<div class="step-line">${escapeHtml(q.correctSolution || '')}</div>`)}
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 
   document.querySelectorAll('.qrow-head').forEach(btn => {
     btn.addEventListener('click', () => {
