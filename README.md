@@ -11,7 +11,7 @@ Mistake / Correct Solution).
 papereval-app/
   api/evaluate.js     ← serverless function — the ONLY place the Gemini key is used
   public/index.html   ← the whole frontend (one file, no build step)
-  vercel.json          ← gives the function up to 60s to run
+  vercel.json          ← gives the function up to 300s to run (needs Fluid Compute on)
   package.json
   .env.example
 ```
@@ -72,10 +72,13 @@ key for local testing — `.env.local` is already in `.gitignore`.
   Gemini's **File API** (upload each page once, then reference it by URI)
   instead of inlining base64 — check Vercel's current docs for the exact
   body-size cap on your plan, since it varies and changes over time.
-- **Function timeout.** `vercel.json` sets `maxDuration: 60`. A long answer
-  sheet can take a while for Gemini to grade in one call; if you hit
-  timeouts, either the Vercel plan needs a higher `maxDuration`, or split
-  evaluation into per-page calls and merge results.
+- **Function timeout.** `vercel.json` sets `maxDuration: 300` (the Hobby-plan
+  ceiling, available once **Fluid Compute** is turned on in Project Settings
+  → Functions). The answer sheet is already graded as overlapping page-pair
+  batches rather than one call, and each batch is now resilient: if one
+  batch times out or errors, the app still shows a report built from every
+  batch that succeeded, with a banner naming the page(s) that failed and a
+  "Retry those pages" button.
 - **Concurrency / 100–300 users.** Vercel serverless functions scale
   horizontally by default (one instance per concurrent request), so this
   isn't a bottleneck at that volume. Gemini's API has its own rate limits
