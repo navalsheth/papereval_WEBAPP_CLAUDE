@@ -154,7 +154,10 @@
   .overlay-mark{position:absolute;border:2.5px solid #E11D2E;box-shadow:0 0 0 1.5px rgba(255,255,255,0.85);}
   .overlay-mark.rect{border-radius:5px;background:rgba(225,29,46,0.14);}
   .overlay-mark.oval{border-radius:50%;background:transparent;}
-  .overlay-badge{position:absolute;background:#E11D2E;color:#fff;font-size:11px;font-weight:700;min-width:20px;height:20px;padding:0 5px;border-radius:10px;display:flex;align-items:center;justify-content:center;transform:translate(-50%,-50%);box-shadow:0 1px 4px rgba(0,0,0,0.35);font-family:'Inter',sans-serif;}
+  .overlay-badge{position:absolute;background:#E11D2E;color:#fff;font-size:11px;font-weight:700;min-width:20px;height:20px;padding:0 5px;border-radius:10px;display:flex;align-items:center;justify-content:center;transform:translate(-50%,-50%);box-shadow:0 1px 4px rgba(0,0,0,0.35);font-family:'Inter',sans-serif;white-space:nowrap;}
+  .overlay-badge.correct{background:#16A34A;font-size:12px;}
+  .overlay-badge.unanswered{background:#6B7280;font-size:12px;}
+  .overlay-badge.unclear{background:#B45309;}
   .lightbox-img-wrap .overlay-layer{position:absolute;inset:0;}
 
   .qlist{max-height:640px;overflow-y:auto;}
@@ -776,6 +779,12 @@ function renderQlist(){
   qlist.innerHTML = visible.map(q => {
     const key = normalizeQNumber(q.questionNumber ?? q.id);
     const pageTag = numberCounts[key] > 1 ? `<span class="qnum-page">(page ${q.page})</span>` : '';
+    // The server no longer sends a separate "mistakeWrong" field — that was
+    // just a re-typed copy of a line already in written[], and re-typing it
+    // was exactly where Gemini's runaway repetition-loop failures happened.
+    // The wrong line is derived here instead, straight from written[].
+    const hasMistake = (q.status === 'wrong' || q.status === 'partial') && q.mistakeStep > 0 && Array.isArray(q.written) && q.written[q.mistakeStep - 1];
+    const mistakeWrittenLine = hasMistake ? q.written[q.mistakeStep - 1] : null;
     return `
     <div class="qrow" data-page="${q.page}" id="qrow-${q.id}">
       <button class="qrow-head" aria-expanded="false">
@@ -791,8 +800,8 @@ function renderQlist(){
           (q.written && q.written.length) ? q.written.map((s,idx)=>`<div class="step-line"><span class="step-num">Step ${idx+1}</span>${escapeHtml(s)}</div>`).join('')
                      : `<span class="unclear">No working found on the page.</span>`)}
         ${renderSub('Mistake', q.id, 'mistake',
-          (q.mistakeWrong || q.mistakeCorrect) ? `<div class="mistake-block"><div class="lbl">${q.mistakeStep ? 'On step ' + q.mistakeStep : 'Mistake'}</div>
-              ${q.mistakeWrong ? `<div>Written: ${escapeHtml(q.mistakeWrong)}</div>` : ''}
+          (hasMistake || q.mistakeCorrect) ? `<div class="mistake-block"><div class="lbl">${q.mistakeStep ? 'On step ' + q.mistakeStep : 'Mistake'}</div>
+              ${mistakeWrittenLine ? `<div>Written: ${escapeHtml(mistakeWrittenLine)}</div>` : ''}
               ${q.mistakeCorrect ? `<div style="margin-top:6px;">Should be: ${escapeHtml(q.mistakeCorrect)}</div>` : ''}</div>`
               : (q.status==='unanswered' ? `<span class="unclear">No attempt to mark.</span>` : `<span class="unclear">No mistakes — fully correct.</span>`))}
         ${renderSub('Correct solution', q.id, 'correct',
@@ -889,24 +898,52 @@ function inflateBox(box){
   };
 }
 
+// A question counts as "unclear" if any step the student wrote was too
+// illegible to read (the model marks those spots with the literal text
+// "<unclear>" per the grading prompt) — this overrides the usual
+// wrong/partial mistake shape with a "needs a manual look" flag instead.
+function questionHasUnclear(q){
+  return Array.isArray(q.written) && q.written.some(s => typeof s === 'string' && s.includes('<unclear>'));
+}
+
 function overlayHtmlForAnswerPage(answerPageIdx){
   if (!answerPageIdx) return '';
   return currentQuestions
-    .filter(q => q.page === answerPageIdx && q.mistakeBox && (q.status === 'wrong' || q.status === 'partial'))
+    .filter(q => q.page === answerPageIdx && q.mistakeBox)
     .map(q => {
       const raw = q.mistakeBox;
       if ([raw.ymin, raw.xmin, raw.ymax, raw.xmax].some(v => typeof v !== 'number')) return '';
       if (raw.ymin === 0 && raw.xmin === 0 && raw.ymax === 0 && raw.xmax === 0) return ''; // placeholder "no box"
       const box = inflateBox(raw);
-      const left = box.xmin / 10, top = box.ymin / 10;
-      const width = (box.xmax - box.xmin) / 10, height = (box.ymax - box.ymin) / 10;
-      const label = 'Q' + escapeHtml(String(q.questionNumber ?? q.id).replace(/^[Qq]\s*/, ''));
-      // Placeholder styling until Phase 3's mistake-type tagging exists: alternate
-      // oval/rectangle by question id (stable per question, not re-randomized on
-      // every render). Once mistake types are real, swap this for a type→shape map.
-      const shape = q.id % 2 === 0 ? 'oval' : 'rect';
-      return `<div class="overlay-mark ${shape}" style="left:${left}%;top:${top}%;width:${width}%;height:${height}%;"></div>
-              <div class="overlay-badge" style="left:${left}%;top:${top}%;">${label}</div>`;
+      const cx = (box.xmin + box.xmax) / 2 / 10, cy = (box.ymin + box.ymax) / 2 / 10; // box center, for a single icon mark
+
+      // Unclear content takes priority — flag it for a manual look rather
+      // than drawing the usual mistake shape over illegible handwriting.
+      if (questionHasUnclear(q) && (q.status === 'wrong' || q.status === 'partial')){
+        return `<div class="overlay-badge unclear" style="left:${cx}%;top:${cy}%;">? Unclear</div>`;
+      }
+
+      if (q.status === 'correct'){
+        return `<div class="overlay-badge correct" style="left:${cx}%;top:${cy}%;">✓</div>`;
+      }
+
+      if (q.status === 'unanswered'){
+        return `<div class="overlay-badge unanswered" style="left:${cx}%;top:${cy}%;">?</div>`;
+      }
+
+      if (q.status === 'wrong' || q.status === 'partial'){
+        const left = box.xmin / 10, top = box.ymin / 10;
+        const width = (box.xmax - box.xmin) / 10, height = (box.ymax - box.ymin) / 10;
+        const label = 'Q' + escapeHtml(String(q.questionNumber ?? q.id).replace(/^[Qq]\s*/, ''));
+        // Placeholder styling until Phase 3's mistake-type tagging exists: alternate
+        // oval/rectangle by question id (stable per question, not re-randomized on
+        // every render). Once mistake types are real, swap this for a type→shape map.
+        const shape = q.id % 2 === 0 ? 'oval' : 'rect';
+        return `<div class="overlay-mark ${shape}" style="left:${left}%;top:${top}%;width:${width}%;height:${height}%;"></div>
+                <div class="overlay-badge" style="left:${left}%;top:${top}%;">${label}</div>`;
+      }
+
+      return '';
     }).join('');
 }
 
