@@ -629,10 +629,21 @@ async function retryFailedBatches(){
 // Two batches can both see the same question (it's on their shared
 // overlap page). Keep one copy per questionNumber — prefer whichever
 // version has more written steps (a cut-off view would have fewer).
+// Two batches can label the exact same question slightly differently
+// (e.g. "6" vs "06", or stray whitespace/case) — normalize before using it
+// as a merge key so these don't get treated as different questions. This
+// only affects matching; the displayed questionNumber is never touched, so
+// it still shows exactly as the student wrote it.
+function normalizeQNumber(raw){
+  return String(raw ?? '').trim().toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/^0+(?=\d)/, '');
+}
+
 function mergeBatchQuestions(allQuestions){
   const byNumber = new Map();
   for (const q of allQuestions){
-    const key = String(q.questionNumber ?? q.id);
+    const key = normalizeQNumber(q.questionNumber ?? q.id);
     const existing = byNumber.get(key);
     if (!existing){
       byNumber.set(key, q);
