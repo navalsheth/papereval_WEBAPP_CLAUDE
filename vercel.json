@@ -1,7 +1,7 @@
 {
   "functions": {
     "api/evaluate.js": {
-      "maxDuration": 60
+      "maxDuration": 300
     }
   }
 }
