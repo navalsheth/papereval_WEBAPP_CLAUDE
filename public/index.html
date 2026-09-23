@@ -909,7 +909,12 @@ function questionHasUnclear(q){
 function overlayHtmlForAnswerPage(answerPageIdx){
   if (!answerPageIdx) return '';
   return currentQuestions
-    .filter(q => q.page === answerPageIdx && q.mistakeBox)
+    // markPage is the page the mistakeBox coordinates were actually read
+    // from — usually the same as "page", but for a question whose working
+    // spans a page break, the marked content (mistake/final line/blank
+    // space) can be on the LATER page while "page" stays where the
+    // question started. Falls back to "page" for older cached results.
+    .filter(q => (q.markPage || q.page) === answerPageIdx && q.mistakeBox)
     .map(q => {
       const raw = q.mistakeBox;
       if ([raw.ymin, raw.xmin, raw.ymax, raw.xmax].some(v => typeof v !== 'number')) return '';
