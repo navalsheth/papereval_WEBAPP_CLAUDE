@@ -514,6 +514,56 @@ function buildAnswerSheetBatches(){
   return batches;
 }
 
+// Grades one page-group. Never throws — always resolves to a result object —
+// so one failed/timed-out batch can't take down the whole evaluation (that
+// was the old bug: a single 504 rejected the shared Promise.all and threw
+// away every other batch's already-successful results).
+async function gradeBatch(pageIndices, questionPaperPayload){
+  try{
+    const res = await fetch('/api/evaluate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        questionPaperPages: questionPaperPayload,
+        answerSheetPages: pageIndices.map(pn => ({
+          mimeType: answerPages[pn - 1].mimeType,
+          data: answerPages[pn - 1].data,
+          pageNumber: pn
+        })),
+        answerSheetTotalPages: answerPages.length
+      })
+    });
+
+    // A platform-level failure (e.g. a Vercel timeout) sends back plain
+    // text/HTML, not JSON — parse defensively instead of letting res.json()
+    // throw an unhandled "Unexpected token" error.
+    let json = null;
+    try{
+      json = await res.json();
+    } catch(parseErr){
+      throw new Error(res.status === 504
+        ? 'Timed out.'
+        : `Server error (${res.status || 'no response'}).`);
+    }
+
+    if (!res.ok) throw new Error(json.error || `Grading failed (${res.status}).`);
+    return { ok: true, pageIndices, questions: json.questions || [] };
+  } catch(err){
+    console.error(`Batch [pages ${pageIndices.join(',')}] failed:`, err);
+    return { ok: false, pageIndices, error: (err && err.message) || 'Unknown error' };
+  }
+}
+
+// Page-groups that failed on the most recent grading pass, kept so the
+// "Retry" button in the warning banner can re-grade just those.
+let lastFailedBatches = [];
+
+function describePageGroups(groups){
+  const parts = groups.map(g => g.length > 1 ? `${g[0]}–${g[g.length - 1]}` : `${g[0]}`);
+  if (parts.length === 1) return `page ${parts[0]}`;
+  return `pages ${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
 async function runEvaluation(){
   showScreen('screen-loading');
   const batches = buildAnswerSheetBatches();
@@ -527,41 +577,53 @@ async function runEvaluation(){
   const questionPaperPayload = questionPages.map(p => ({ mimeType: p.mimeType, data: p.data }));
 
   const batchPromises = batches.map(pageIndices =>
-    fetch('/api/evaluate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        questionPaperPages: questionPaperPayload,
-        answerSheetPages: pageIndices.map(pn => ({
-          mimeType: answerPages[pn - 1].mimeType,
-          data: answerPages[pn - 1].data,
-          pageNumber: pn
-        })),
-        answerSheetTotalPages: answerPages.length
-      })
+    gradeBatch(pageIndices, questionPaperPayload).then(result => {
+      completed++;
+      if (totalBatches > 1) msgEl.textContent = `Grading pages — ${completed} of ${totalBatches} groups done…`;
+      return result;
     })
-      .then(async res => {
-        const json = await res.json();
-        completed++;
-        if (totalBatches > 1) msgEl.textContent = `Grading pages — ${completed} of ${totalBatches} groups done…`;
-        if (!res.ok) throw new Error(json.error || `Grading failed for pages ${pageIndices.join(', ')}.`);
-        return json.questions || [];
-      })
   );
 
   try{
-    const batchResults = await Promise.all(batchPromises);
-    const merged = mergeBatchQuestions(batchResults.flat());
+    const results = await Promise.all(batchPromises); // gradeBatch never rejects, so this always settles
+    const successes = results.filter(r => r.ok);
+    const failures = results.filter(r => !r.ok);
+    const merged = mergeBatchQuestions(successes.flatMap(r => r.questions));
+
     if (merged.length === 0){
-      showError('No questions could be graded. Try clearer scans, or check that the right files were uploaded.');
+      showError(failures.length
+        ? 'Grading failed — every page group timed out or errored. Please try again in a moment.'
+        : 'No questions could be graded. Try clearer scans, or check that the right files were uploaded.');
       return;
     }
-    buildReport(merged);
+
+    lastFailedBatches = failures.map(f => f.pageIndices);
+    buildReport(merged, lastFailedBatches);
     showScreen('screen-report');
   } catch(err){
     console.error(err);
     showError(err.message || 'Could not reach the evaluation service. Check your connection and try again.');
   }
+}
+
+// Re-grades only the page-groups that failed last time, and merges any
+// newly-successful results into the report already on screen.
+async function retryFailedBatches(){
+  if (!lastFailedBatches.length) return;
+  const btn = document.getElementById('retryFailedBtn');
+  if (btn){ btn.disabled = true; btn.textContent = 'Retrying…'; }
+
+  const questionPaperPayload = questionPages.map(p => ({ mimeType: p.mimeType, data: p.data }));
+  const results = await Promise.all(
+    lastFailedBatches.map(pageIndices => gradeBatch(pageIndices, questionPaperPayload))
+  );
+
+  const newSuccesses = results.filter(r => r.ok);
+  const stillFailed = results.filter(r => !r.ok);
+  const combined = mergeBatchQuestions([...currentQuestions, ...newSuccesses.flatMap(r => r.questions)]);
+
+  lastFailedBatches = stillFailed.map(f => f.pageIndices);
+  buildReport(combined, lastFailedBatches);
 }
 
 // Two batches can both see the same question (it's on their shared
@@ -609,7 +671,7 @@ let currentQuestions = [];
 
 const statusLabel = { correct: "Correct", wrong: "Wrong", partial: "Partially wrong", unanswered: "Unanswered" };
 
-function buildReport(questions){
+function buildReport(questions, failedBatches){
   currentQuestions = questions || [];
   const totals = {
     total: currentQuestions.length,
@@ -619,7 +681,15 @@ function buildReport(questions){
     unanswered: currentQuestions.filter(q => q.status === 'unanswered').length
   };
 
-  document.getElementById('warningBanner').style.display = 'none';
+  const warningEl = document.getElementById('warningBanner');
+  if (failedBatches && failedBatches.length){
+    warningEl.style.display = 'block';
+    warningEl.innerHTML = `⚠️ Couldn't grade ${describePageGroups(failedBatches)} (server timeout or error). Everything else below graded fine. &nbsp;<button id="retryFailedBtn" class="btn-secondary" style="padding:5px 12px;font-size:13px;">Retry those pages</button>`;
+    document.getElementById('retryFailedBtn').addEventListener('click', retryFailedBatches);
+  } else {
+    warningEl.style.display = 'none';
+    warningEl.innerHTML = '';
+  }
 
   document.getElementById('statsBar').innerHTML = `
     <div class="stat"><div class="num">${totals.total}</div><div class="label">Total questions</div></div>
