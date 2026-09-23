@@ -49,11 +49,7 @@ const RESPONSE_SCHEMA = {
           },
           mistakeStep: {
             type: 'INTEGER',
-            description: '1-based index into written[] where the first mistake appears. Omit if correct or unanswered.'
-          },
-          mistakeWrong: {
-            type: 'STRING',
-            description: 'The incorrect line exactly as written, in LaTeX. Omit if correct or unanswered.'
+            description: '1-based index into written[] where the first mistake appears. REQUIRED on every question — for "wrong"/"partial" give the real step number (never 0). For "correct"/"unanswered", set it to 0. The app looks up written[mistakeStep-1] itself to show the wrong line — never re-type that line into another field.'
           },
           mistakeCorrect: {
             type: 'STRING',
@@ -69,7 +65,7 @@ const RESPONSE_SCHEMA = {
             },
             required: ['ymin', 'xmin', 'ymax', 'xmax'],
             description:
-              'A bounding box on the answer-sheet PAGE IMAGE (the true page given in "page") in normalized 0-1000 coordinates [ymin, xmin, ymax, xmax], (0,0)=top-left, (1000,1000)=bottom-right. For "wrong"/"partial": your best-effort tight box around the mistake line — always attempt a real estimate, never skip it. For "correct"/"unanswered": set every value to 0.'
+              'A bounding box on the answer-sheet PAGE IMAGE (the true page given in "page") in normalized 0-1000 coordinates [ymin, xmin, ymax, xmax], (0,0)=top-left, (1000,1000)=bottom-right. REQUIRED on every question, and it must always be a real best-effort estimate — never all zeros, for any status. What to box: "wrong"/"partial" → the specific mistake line (the same step written[mistakeStep-1] points to). "correct" → the final answer/result line of the student\'s working, so it can be marked with a checkmark. "unanswered" → the blank space where the student should have written an answer, just below/after the question\'s problem statement — estimate this even though nothing is written there.'
           },
           correctSolution: {
             type: 'ARRAY',
@@ -78,7 +74,7 @@ const RESPONSE_SCHEMA = {
               'The COMPLETE correct solution as a sequence of steps (same style as written[]) — every step of a proper method, not just the final answer. The last item should state the final answer clearly.'
           }
         },
-        required: ['id', 'questionNumber', 'page', 'title', 'status', 'written', 'correctSolution', 'mistakeBox']
+        required: ['id', 'questionNumber', 'page', 'title', 'status', 'written', 'correctSolution', 'mistakeBox', 'mistakeStep']
       }
     }
   },
@@ -92,6 +88,7 @@ IMPORTANT — you are only being shown SOME of the answer sheet's pages in this 
 - If a question's working clearly starts before the first page you can see, or clearly continues past the last page you can see (cut off at the very edge with no natural ending), SKIP that question entirely — leave it out of "questions" completely. Do not guess, and do not grade a partial view. It will be fully graded in another call that has its full working visible.
 - EXCEPTION — read this carefully: if the text below tells you a page you were given is the very FIRST page of the whole answer sheet, there is nothing before it, so never skip a question there for "possibly starting earlier" — grade it normally. Likewise, if a page you were given is the very LAST page of the whole answer sheet, there is nothing after it, so never skip a question there for "possibly continuing further" — grade it normally, exactly as it appears, even if it looks short.
 - Being near the top or bottom edge of a page is NOT by itself a reason to skip a question. Only skip for a genuine, visible sign of continuation: the last line trails off abruptly mid-equation/mid-sentence at the very bottom edge with no concluding statement, AND you were not told that page is the last page of the whole sheet.
+- BLANK / NOT-ATTEMPTED QUESTIONS ARE NOT THE SAME AS PARTIAL ONES — do not apply the skip-for-possible-continuation logic to them. If a question's problem statement is fully visible and there is clearly no solution attempt written under it (empty space, or nothing at all before the next question or the end of the page), that is already the complete picture — there is no partial working that could be "cut off," because nothing was started. Grade it immediately as "unanswered" (see rule 3 below) rather than skipping it. This applies even if the blank space runs all the way to the bottom of the page you can see, and even if you cannot yet see the next question.
 - Also skip any question that doesn't appear at all on the pages you were given.
 - It is completely normal and expected for you to return only some of the answer sheet's questions in this call — do not try to cover the whole paper.
 - CONTINUATIONS ACROSS A PAGE BREAK: a student's working for one question often ends near the bottom of one page and picks back up at the very TOP of the next page with no question number rewritten there — because they never stopped, they just ran out of room. When a page you were given opens with math/working that has no question number above it, no blank gap before it, and clearly carries on the same calculation as whatever was last happening at the bottom of the previous page you can see (same variable, same method, no new question text) — treat that opening content as belonging to that SAME, most recently seen question number. Append it to that question's "written" steps in the correct order. Do NOT invent a new unlabeled question for it, and do NOT silently drop it — an unlabeled continuation you can now see in full is exactly the case this batching is designed to let you complete.
@@ -99,20 +96,103 @@ IMPORTANT — you are only being shown SOME of the answer sheet's pages in this 
 Non-negotiable rules for every question you DO include:
 1. In "written", reproduce EXACTLY what the student wrote — every step, in their own notation. Do not correct spelling, do not fill in missing steps, do not "clean up" their working. Never invent a step they did not write.
 2. If any part of the handwriting is illegible or ambiguous, write the literal string "<unclear>" in place of that part. Never guess at unclear content.
-3. If a question has no attempt at all (and is fully within view — see above), set status to "unanswered" and written to an empty array.
+3. If a question's problem statement is visible and there is no solution attempt under it at all, set status to "unanswered" and written to an empty array — include it, do not leave it out (see the blank-question note above; this is the single most common way a real question quietly disappears from the report, so err on the side of including it as unanswered).
 4. Formatting: write each field as plain text, and wrap ONLY the mathematical notation in single dollar signs, e.g. "Evaluate $\\int \\frac{1}{\\sqrt{3-4x}}\\,dx$". Keep ordinary words (labels like "Evaluate", "Solve for x", short explanations) as plain text outside the dollar signs — do not put whole sentences inside math mode. Inside the dollar signs use proper LaTeX (\\frac{a}{b}, \\sin, \\sqrt{}, ^{}, _{}, etc). The mathematical content itself must still be an exact copy of what was written, never rewritten or simplified — this formatting rule only affects how it's typeset, never what it says.
 5. Grading status:
    - "correct": final answer and method are both correct.
    - "wrong": the final answer is incorrect.
    - "partial": some correct steps followed by an error, or a correct method with a minor slip.
    - "unanswered": left blank.
-6. For "wrong" and "partial", identify the exact step (1-based index into written[]) where the first mistake occurs, quote what was written there in mistakeWrong, and give what it should have been in mistakeCorrect.
-7. "mistakeBox" is REQUIRED on every question — never omit it. For "wrong"/"partial": give your best-effort tight box around the mistake line, in normalized 0-1000 coordinates; always attempt a real estimate. For "correct"/"unanswered": set every value to 0.
+6. "mistakeStep" is REQUIRED on every question. For "wrong"/"partial", set it to the 1-based index into written[] where the first mistake occurs (never 0), and give what that step should have been in mistakeCorrect. For "correct"/"unanswered", set mistakeStep to 0. Do NOT re-type or re-quote the wrong line anywhere else — written[] already has it verbatim, and duplicating it elsewhere is unnecessary.
+7. "mistakeBox" is REQUIRED on every question — never omit it, and never use all-zero placeholder values, for ANY status. Always give a real best-effort box in normalized 0-1000 coordinates: for "wrong"/"partial", box the mistake line itself; for "correct", box the final answer/result line (this is how the app places a checkmark on it); for "unanswered", box the blank space right after the question's problem statement, where the student should have written something — estimate its position even though it's empty.
+13. NEVER repeat the same character, token, or short phrase more than a few times in a row in any field. If you notice yourself about to repeat something instead of making progress, STOP that field immediately — write "<unclear>" and move on to the next field or question rather than continuing. A field that trails into repetition is worse than a shorter, honest one.
 8. "correctSolution" must be the COMPLETE worked solution, step by step, like a model answer a teacher would write — never just the final result on its own.
 9. "questionNumber" must be copied exactly as the student labeled it on the answer sheet, but WITHOUT any leading "Q" — just the number/label itself (e.g. "1", "18", "2(a)"), even if the student wrote a "Q" before it. The app adds its own "Q" prefix when displaying it.
 10. "page" must be the TRUE page number given to you for each image below, not a 1/2 count of how many images were in this call.
 11. Keep every field strictly to its content. Never include comments about your own output, formatting notes, apologies, or any meta text of any kind in any field.
 12. Return ONLY JSON matching the provided schema — no prose, no markdown fences, no commentary outside the JSON.`;
+
+// Recovers as many COMPLETE question objects as possible from a response
+// that broke before the JSON could close (e.g. the model got stuck in a
+// repetition loop inside one field and ran until the token limit). This is
+// JSON-STRING-AWARE: it tracks whether it's currently inside a quoted string
+// so that LaTeX's own braces (like \frac{1}{2}) are never mistaken for JSON
+// structure. It finds the last fully-closed question object in the
+// "questions" array and discards only the broken tail after it.
+function salvagePartialQuestions(text) {
+  const arrStart = text.indexOf('[', text.indexOf('"questions"'));
+  if (arrStart === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+  let lastSafeEnd = -1; // index right after the last fully-closed question object
+
+  for (let i = arrStart; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escapeNext) { escapeNext = false; }
+      else if (ch === '\\') { escapeNext = true; }
+      else if (ch === '"') { inString = false; }
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{' || ch === '[') { depth++; continue; }
+    if (ch === '}' || ch === ']') {
+      depth--;
+      if (depth === 1 && ch === '}') { lastSafeEnd = i + 1; } // closed one top-level question object
+      if (depth === 0) break; // array closed cleanly — nothing broken to salvage
+    }
+  }
+
+  if (lastSafeEnd === -1) return null; // couldn't even find one complete question object
+
+  const candidate = text.slice(0, lastSafeEnd) + ']}';
+  try {
+    const parsed = JSON.parse(candidate);
+    return Array.isArray(parsed.questions) ? parsed.questions : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Calls Gemini once and returns { ok, questions, recovered, raw, status, errText }.
+// Never throws on a bad/unparseable model response — that's handled here via
+// salvage, so the caller can decide whether to retry.
+async function gradeOnce(requestBody, apiKey, shownPageNumbers) {
+  const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!geminiRes.ok) {
+    const errText = await geminiRes.text();
+    console.error('Gemini API error:', geminiRes.status, errText);
+    return { ok: false, status: geminiRes.status, errText };
+  }
+
+  const geminiJson = await geminiRes.json();
+  const textPart = geminiJson?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  if (!textPart) {
+    const blockReason = geminiJson?.promptFeedback?.blockReason;
+    return { ok: false, status: 502, errText: blockReason ? `blocked (${blockReason})` : 'empty response' };
+  }
+
+  try {
+    const result = JSON.parse(textPart);
+    return { ok: true, questions: result.questions || [], recovered: false };
+  } catch (e) {
+    const salvaged = salvagePartialQuestions(textPart);
+    if (salvaged && salvaged.length > 0) {
+      console.warn(`Batch [pages ${shownPageNumbers}]: response broke before closing (${textPart.length} chars) — salvaged ${salvaged.length} complete question(s) from before the break.`);
+      return { ok: true, questions: salvaged, recovered: true };
+    }
+    console.error(`Batch [pages ${shownPageNumbers}]: failed to parse and nothing salvageable. First 500 chars:`, textPart.slice(0, 500));
+    return { ok: false, status: 502, errText: 'unparseable response, nothing salvageable' };
+  }
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -181,46 +261,32 @@ export default async function handler(req, res) {
   };
 
   try {
-    const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    });
+    let attempt = await gradeOnce(requestBody, apiKey, shownPageNumbers);
 
-    if (!geminiRes.ok) {
-      const errText = await geminiRes.text();
-      console.error('Gemini API error:', geminiRes.status, errText);
-      res.status(502).json({ error: `The evaluation service returned an error grading page(s) ${shownPageNumbers}. Please try again.` });
+    if (!attempt.ok) {
+      // One retry, at a HIGHER temperature (not lower). A degenerate
+      // repetition loop is a near-greedy-decoding failure — the model keeps
+      // picking the same most-likely next token — so a low temperature is
+      // more likely to reproduce the exact same loop on a retry, not less.
+      // Raising temperature gives the retry real odds of not repeating it.
+      console.warn(`Batch [pages ${shownPageNumbers}]: first attempt failed (${attempt.status}: ${attempt.errText || 'no detail'}) — retrying once at a higher temperature.`);
+      const retryBody = {
+        ...requestBody,
+        generationConfig: { ...requestBody.generationConfig, temperature: 0.4 }
+      };
+      attempt = await gradeOnce(retryBody, apiKey, shownPageNumbers);
+    }
+
+    if (!attempt.ok) {
+      console.error(`Batch [pages ${shownPageNumbers}]: failed after retry too (${attempt.status}: ${attempt.errText || 'no detail'}).`);
+      res.status(502).json({ error: `Could not grade page(s) ${shownPageNumbers}, even after a retry. Please try again.` });
       return;
     }
 
-    const geminiJson = await geminiRes.json();
-    const textPart = geminiJson?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const qSummary = attempt.questions.map(q => `Q${q.questionNumber}(p${q.page},${q.status})`).join(', ') || '(none)';
+    console.log(`Batch [pages ${shownPageNumbers}]: returned ${attempt.questions.length} question(s)${attempt.recovered ? ' [recovered from a broken/looping response]' : ''}: ${qSummary}`);
 
-    if (!textPart) {
-      const blockReason = geminiJson?.promptFeedback?.blockReason;
-      res.status(502).json({
-        error: blockReason
-          ? `Page(s) ${shownPageNumbers} were blocked (${blockReason}). Try clearer, unambiguous scans.`
-          : `No evaluation was returned for page(s) ${shownPageNumbers}. Try clearer scans.`
-      });
-      return;
-    }
-
-    let result;
-    try {
-      result = JSON.parse(textPart);
-    } catch (e) {
-      console.error('Failed to parse Gemini JSON output:', textPart);
-      res.status(502).json({ error: `Could not parse the evaluation result for page(s) ${shownPageNumbers}. Please try again.` });
-      return;
-    }
-
-    const returnedQs = result.questions || [];
-    const qSummary = returnedQs.map(q => `Q${q.questionNumber}(p${q.page},${q.status})`).join(', ') || '(none)';
-    console.log(`Batch [pages ${shownPageNumbers}]: returned ${returnedQs.length} question(s): ${qSummary}`);
-
-    res.status(200).json(result);
+    res.status(200).json({ questions: attempt.questions });
   } catch (err) {
     console.error('Evaluation error:', err);
     res.status(500).json({ error: `Unexpected server error grading page(s) ${shownPageNumbers}.` });
