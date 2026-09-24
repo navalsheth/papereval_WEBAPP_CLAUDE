@@ -46,7 +46,20 @@
   @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) h1, :root:not([data-theme="light"]) h2, :root:not([data-theme="light"]) h3{color:var(--ink);} }
   button{font-family:inherit;}
   .app{max-width:1120px;margin:0 auto;padding:0 20px 60px;}
-  .topbar{display:flex;align-items:center;justify-content:space-between;padding:22px 4px 18px;}
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:22px 4px 18px;flex-wrap:wrap;gap:10px;}
+  .topbar-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .auth-chip{display:flex;align-items:center;gap:8px;}
+  .auth-avatar{width:26px;height:26px;border-radius:50%;object-fit:cover;}
+  .auth-avatar-fallback{display:flex;align-items:center;justify-content:center;background:var(--teal);color:#fff;font-size:12px;font-weight:700;font-family:'Inter',sans-serif;}
+  .auth-name{font-size:13.5px;font-weight:600;color:var(--ink);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .auth-link{background:none;border:none;color:var(--teal);font-size:13px;font-weight:600;cursor:pointer;padding:2px 0;font-family:'Inter',sans-serif;}
+  .auth-link:hover{text-decoration:underline;}
+  .history-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--card);margin-bottom:10px;cursor:pointer;flex-wrap:wrap;}
+  .history-row:hover{border-color:var(--teal);}
+  .history-title{font-weight:600;color:var(--ink);font-size:14.5px;}
+  .history-date{color:var(--muted);font-size:12.5px;margin-top:2px;}
+  .history-stats{display:flex;gap:6px;flex-wrap:wrap;}
+  .history-no-image{padding:70px 20px;text-align:center;color:var(--muted);font-size:13.5px;}
   .wordmark{display:flex;align-items:center;gap:10px;}
   .wordmark span{font-family:'Source Serif 4',serif;font-size:22px;font-weight:600;color:var(--navy);letter-spacing:-0.01em;}
   :root[data-theme="dark"] .wordmark span{color:var(--ink);}
@@ -213,8 +226,11 @@
       </svg>
       <span>PaperEval</span>
     </div>
-    <div class="tag" id="statusTag">Live — Gemini</div>
-    <button class="btn-secondary" id="newEvalBtn" style="display:none;">← New evaluation</button>
+    <div class="topbar-right">
+      <div class="tag" id="statusTag">Live — Gemini</div>
+      <button class="btn-secondary" id="newEvalBtn" style="display:none;">← New evaluation</button>
+      <div id="authArea"></div>
+    </div>
   </div>
 
   <section id="screen-upload" class="screen active">
@@ -303,6 +319,14 @@
       </div>
     </div>
   </section>
+
+  <section id="screen-history" class="screen">
+    <div class="ruled" style="padding:24px 4px 8px;">
+      <h1 style="font-size:22px;margin-bottom:6px;">Your evaluation history</h1>
+      <p style="color:var(--muted);font-size:13.5px;">Evaluations you graded while signed in. Only the graded report is saved — page images aren't kept, so mistake marks on the image aren't available here.</p>
+    </div>
+    <div id="historyList" style="padding:8px 4px 24px;"></div>
+  </section>
 </div>
 
 <div class="lightbox" id="lightbox">
@@ -324,6 +348,183 @@
 <script type="module">
 import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs';
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
+
+/* ---------- Firebase: Google Sign-In + evaluation history ---------- */
+// The values below are NOT secret — Firebase's web config is meant to ship
+// inside client-side code (every Firebase web app's page source shows its
+// own). Real protection comes from the Firestore Security Rules set up in
+// the Firebase console, not from hiding this object.
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
+import {
+  getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
+} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import {
+  getFirestore, collection, addDoc, updateDoc, doc, getDoc, getDocs,
+  query, where, orderBy, limit, serverTimestamp
+} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBSrmnCobrfhTKoGuJJaSyssJKhdxt9epk",
+  authDomain: "papereval-78e06.firebaseapp.com",
+  projectId: "papereval-78e06",
+  storageBucket: "papereval-78e06.firebasestorage.app",
+  messagingSenderId: "1001610026616",
+  appId: "1:1001610026616:web:54bb81ca4b9607e29ad78d"
+};
+const firebaseApp = initializeApp(firebaseConfig);
+const auth = getAuth(firebaseApp);
+const db = getFirestore(firebaseApp);
+const googleProvider = new GoogleAuthProvider();
+
+let currentUser = null;
+let lastSavedHistoryDocId = null; // the Firestore doc for the evaluation currently on screen, if any
+
+function renderAuthArea(){
+  const el = document.getElementById('authArea');
+  if (!el) return;
+  if (currentUser){
+    const initial = (currentUser.displayName || currentUser.email || '?').trim().charAt(0).toUpperCase();
+    const avatar = currentUser.photoURL
+      ? `<img src="${currentUser.photoURL}" class="auth-avatar" referrerpolicy="no-referrer" alt="">`
+      : `<div class="auth-avatar auth-avatar-fallback">${escapeHtml(initial)}</div>`;
+    const firstName = escapeHtml((currentUser.displayName || currentUser.email || '').split(' ')[0]);
+    el.innerHTML = `
+      <div class="auth-chip">
+        ${avatar}
+        <span class="auth-name">${firstName}</span>
+        <button class="auth-link" id="historyBtn" type="button">History</button>
+        <button class="auth-link" id="signOutBtn" type="button">Sign out</button>
+      </div>`;
+    document.getElementById('historyBtn').addEventListener('click', openHistory);
+    document.getElementById('signOutBtn').addEventListener('click', () => signOut(auth));
+  } else {
+    el.innerHTML = `<button class="btn-secondary" id="signInBtn" type="button">Sign in with Google</button>`;
+    document.getElementById('signInBtn').addEventListener('click', () => {
+      signInWithPopup(auth, googleProvider).catch(err => {
+        console.error('Sign-in failed:', err);
+        if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request'){
+          alert('Sign-in failed: ' + (err.message || 'please try again.'));
+        }
+      });
+    });
+  }
+}
+
+onAuthStateChanged(auth, (user) => {
+  currentUser = user;
+  renderAuthArea();
+});
+
+function computeTotals(questions){
+  return {
+    total: questions.length,
+    correct: questions.filter(q => q.status === 'correct').length,
+    wrong: questions.filter(q => q.status === 'wrong').length,
+    partial: questions.filter(q => q.status === 'partial').length,
+    unanswered: questions.filter(q => q.status === 'unanswered').length
+  };
+}
+
+// Saves a freshly-graded report as a new history entry (signed-in users
+// only). JSON round-tripping strips any `undefined` field values (e.g. an
+// omitted mistakeCorrect on a correct/unanswered question) that Firestore
+// would otherwise reject outright.
+async function saveEvaluationToHistory(questions, totals){
+  if (!currentUser) { lastSavedHistoryDocId = null; return; }
+  try{
+    const paperLabel = (answerFiles && answerFiles[0] && answerFiles[0].name) || `Evaluation — ${new Date().toLocaleDateString('en-IN')}`;
+    const clean = JSON.parse(JSON.stringify(questions));
+    const ref = await addDoc(collection(db, 'evaluations'), {
+      userId: currentUser.uid,
+      userEmail: currentUser.email || null,
+      createdAt: serverTimestamp(),
+      paperLabel,
+      totals,
+      questions: clean
+    });
+    lastSavedHistoryDocId = ref.id;
+  } catch(err){
+    console.error('Could not save evaluation to history:', err);
+    lastSavedHistoryDocId = null;
+  }
+}
+
+// If pages were re-graded via "Retry those pages" after the initial save,
+// update that SAME history entry instead of creating a duplicate.
+async function updateSavedHistory(questions, totals){
+  if (!currentUser) return;
+  if (!lastSavedHistoryDocId) { await saveEvaluationToHistory(questions, totals); return; }
+  try{
+    const clean = JSON.parse(JSON.stringify(questions));
+    await updateDoc(doc(db, 'evaluations', lastSavedHistoryDocId), { totals, questions: clean, updatedAt: serverTimestamp() });
+  } catch(err){
+    console.error('Could not update saved history entry:', err);
+  }
+}
+
+async function openHistory(){
+  showScreen('screen-history');
+  const listEl = document.getElementById('historyList');
+  listEl.innerHTML = `<div class="empty-msg">Loading…</div>`;
+  if (!currentUser){ listEl.innerHTML = `<div class="empty-msg">Sign in to see your evaluation history.</div>`; return; }
+  try{
+    const q = query(collection(db, 'evaluations'), where('userId', '==', currentUser.uid), orderBy('createdAt', 'desc'), limit(50));
+    const snap = await getDocs(q);
+    if (snap.empty){
+      listEl.innerHTML = `<div class="empty-msg">No saved evaluations yet — evaluations you grade while signed in will show up here.</div>`;
+      return;
+    }
+    const rows = [];
+    snap.forEach(docSnap => {
+      const d = docSnap.data();
+      const dateObj = d.createdAt && d.createdAt.toDate ? d.createdAt.toDate() : null;
+      const dateStr = dateObj ? dateObj.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+      const t = d.totals || {};
+      rows.push(`
+        <div class="history-row" data-id="${docSnap.id}" tabindex="0" role="button">
+          <div class="history-main">
+            <div class="history-title">${escapeHtml(d.paperLabel || 'Untitled evaluation')}</div>
+            <div class="history-date">${escapeHtml(dateStr)}</div>
+          </div>
+          <div class="history-stats">
+            <span class="pill correct">${t.correct || 0} correct</span>
+            <span class="pill wrong">${t.wrong || 0} wrong</span>
+            <span class="pill partial">${t.partial || 0} partial</span>
+            <span class="pill unanswered">${t.unanswered || 0} unanswered</span>
+          </div>
+        </div>`);
+    });
+    listEl.innerHTML = rows.join('');
+    listEl.querySelectorAll('.history-row').forEach(row => {
+      const open = () => openHistoryEntry(row.dataset.id);
+      row.addEventListener('click', open);
+      row.addEventListener('keydown', e => { if (e.key === 'Enter') open(); });
+    });
+  } catch(err){
+    console.error('Could not load history:', err);
+    // A missing composite index shows up here on first use — Firestore's
+    // own error includes a direct link to create it in the console.
+    listEl.innerHTML = `<div class="empty-msg">Couldn't load your history. If this is the first time, check the browser console for a Firestore "create index" link and click it, then try again.</div>`;
+  }
+}
+
+async function openHistoryEntry(id){
+  try{
+    const snap = await getDoc(doc(db, 'evaluations', id));
+    if (!snap.exists()) return;
+    const d = snap.data();
+    // No page images were saved for history entries — clear the image
+    // viewer's page cache so it doesn't show stale images from before.
+    questionPages = [];
+    answerPages = [];
+    lastSavedHistoryDocId = id;
+    buildReport(d.questions || [], [], true);
+    showScreen('screen-report');
+  } catch(err){
+    console.error('Could not open history entry:', err);
+    alert('Could not open this evaluation. Please try again.');
+  }
+}
 
 const MAX_DIM = 1600;      // longest edge, px — keeps payloads reasonable
 const JPEG_QUALITY = 0.82;
@@ -605,6 +806,8 @@ async function runEvaluation(){
     lastFailedBatches = failures.map(f => f.pageIndices);
     buildReport(merged, lastFailedBatches);
     showScreen('screen-report');
+    lastSavedHistoryDocId = null; // fresh evaluation — starts its own history entry, not an update to whatever was open before
+    saveEvaluationToHistory(merged, computeTotals(merged));
   } catch(err){
     console.error(err);
     showError(err.message || 'Could not reach the evaluation service. Check your connection and try again.');
@@ -629,6 +832,7 @@ async function retryFailedBatches(){
 
   lastFailedBatches = stillFailed.map(f => f.pageIndices);
   buildReport(combined, lastFailedBatches);
+  updateSavedHistory(combined, computeTotals(combined));
 }
 
 // Two batches can both see the same question (it's on their shared
@@ -713,18 +917,14 @@ let currentAnswerPageIdx = 1;
 let currentQuestionPageIdx = 1;
 let activePageSet = 'answer';
 let currentQuestions = [];
+let viewingHistory = false; // true when the report on screen is a reopened history entry (no page images)
 
 const statusLabel = { correct: "Correct", wrong: "Wrong", partial: "Partially wrong", unanswered: "Unanswered" };
 
-function buildReport(questions, failedBatches){
+function buildReport(questions, failedBatches, isHistory){
   currentQuestions = questions || [];
-  const totals = {
-    total: currentQuestions.length,
-    correct: currentQuestions.filter(q => q.status === 'correct').length,
-    wrong: currentQuestions.filter(q => q.status === 'wrong').length,
-    partial: currentQuestions.filter(q => q.status === 'partial').length,
-    unanswered: currentQuestions.filter(q => q.status === 'unanswered').length
-  };
+  viewingHistory = !!isHistory;
+  const totals = computeTotals(currentQuestions);
 
   const warningEl = document.getElementById('warningBanner');
   if (failedBatches && failedBatches.length){
@@ -755,7 +955,9 @@ function buildReport(questions, failedBatches){
 // Question list — filtered to the currently-viewed answer-sheet page.
 // Re-run this every time the page changes (see renderPage), not just once.
 function renderQlist(){
-  const filterPage = activePageSet === 'answer' ? currentAnswerPageIdx : null;
+  // A history entry has no page images to sync against, so show the whole
+  // saved report unfiltered instead of page-by-page.
+  const filterPage = (activePageSet === 'answer' && !viewingHistory) ? currentAnswerPageIdx : null;
   const visible = filterPage ? currentQuestions.filter(q => q.page === filterPage) : currentQuestions;
 
   const qlist = document.getElementById('qlist');
@@ -875,7 +1077,19 @@ function renderPage(){
   document.getElementById('pageTitle').textContent = `${label} — page ${idx}`;
   document.getElementById('pageIndicator').textContent = `${idx} / ${total}`;
   const img = document.getElementById('scanImg');
-  img.src = (pages[idx-1] || {}).dataUrl || '';
+  const wrap = document.getElementById('scanImgWrap');
+  const noImageNote = wrap.querySelector('.history-no-image');
+  if (pages.length){
+    img.style.display = '';
+    img.src = (pages[idx-1] || {}).dataUrl || '';
+    if (noImageNote) noImageNote.remove();
+  } else {
+    img.style.display = 'none';
+    img.removeAttribute('src');
+    if (!noImageNote){
+      wrap.insertAdjacentHTML('beforeend', `<div class="history-no-image">Page images aren't saved to history — showing the graded report only.</div>`);
+    }
+  }
   document.getElementById('prevPage').disabled = idx === 1;
   document.getElementById('nextPage').disabled = idx === total;
   renderOverlay(activePageSet === 'answer' ? idx : null);
