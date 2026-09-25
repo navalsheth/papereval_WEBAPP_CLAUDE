@@ -1,9 +1,9 @@
 {
-  "name": "papereval-app",
-  "version": "0.1.0",
+  "name": "papereval",
+  "version": "1.0.0",
   "private": true,
-  "description": "AI paper evaluation — students upload a question paper and answer sheet, Gemini grades it question by question.",
-  "engines": {
-    "node": ">=18"
+  "description": "PaperEval — Vercel serverless functions for AI answer-sheet grading (see api/evaluate.js) plus the Firebase Admin SDK used for server-side usage caps.",
+  "dependencies": {
+    "firebase-admin": "^14.5.0"
   }
 }
