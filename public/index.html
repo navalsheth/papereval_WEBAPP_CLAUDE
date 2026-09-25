@@ -60,6 +60,12 @@
   .history-date{color:var(--muted);font-size:12.5px;margin-top:2px;}
   .history-stats{display:flex;gap:6px;flex-wrap:wrap;}
   .history-no-image{padding:70px 20px;text-align:center;color:var(--muted);font-size:13.5px;}
+  .modal-backdrop{position:fixed;inset:0;background:rgba(10,16,22,0.55);z-index:1100;display:none;align-items:center;justify-content:center;padding:20px;}
+  .modal-backdrop.active{display:flex;}
+  .modal-card{background:var(--card);border-radius:14px;padding:32px;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.3);}
+  .modal-card h2{font-family:'Source Serif 4',serif;font-size:20px;margin-bottom:10px;color:var(--ink);}
+  .modal-card p{color:var(--muted);font-size:14px;line-height:1.5;margin-bottom:22px;}
+  .modal-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;}
   .wordmark{display:flex;align-items:center;gap:10px;}
   .wordmark span{font-family:'Source Serif 4',serif;font-size:22px;font-weight:600;color:var(--navy);letter-spacing:-0.01em;}
   :root[data-theme="dark"] .wordmark span{color:var(--ink);}
@@ -329,6 +335,17 @@
   </section>
 </div>
 
+<div class="modal-backdrop" id="trialGateBackdrop">
+  <div class="modal-card">
+    <h2 id="gateTitle">You've used your free evaluation</h2>
+    <p id="gateBody">Sign in with Google to keep evaluating — it's still free, and you'll also get a saved history of every paper you grade.</p>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="gateSecondaryBtn" type="button">Not now</button>
+      <button class="btn-primary" id="gatePrimaryBtn" type="button" style="padding:12px 24px;font-size:15px;">Sign in with Google</button>
+    </div>
+  </div>
+</div>
+
 <div class="lightbox" id="lightbox">
   <div class="lightbox-topbar">
     <span id="lightboxCounter"></span>
@@ -414,6 +431,69 @@ onAuthStateChanged(auth, (user) => {
   currentUser = user;
   renderAuthArea();
 });
+
+/* ---------- Free-trial gate: 1 evaluation anonymously, then sign-in ---------- */
+const FREE_TRIAL_KEY = 'papereval_free_trial_used';
+
+function hasUsedFreeTrial(){
+  try { return localStorage.getItem(FREE_TRIAL_KEY) === '1'; }
+  catch(e){ return false; } // storage blocked (private browsing etc.) — fail open, never block grading over this
+}
+function markFreeTrialUsed(){
+  try { localStorage.setItem(FREE_TRIAL_KEY, '1'); } catch(e){ /* ignore */ }
+}
+// Generic modal — reused for both "sign in for more" and "monthly cap
+// reached" (they need different text/buttons, so nothing is hardcoded here).
+function showGateModal({ title, body, primaryText, onPrimary, secondaryText }){
+  document.getElementById('gateTitle').textContent = title;
+  document.getElementById('gateBody').textContent = body;
+  const primaryBtn = document.getElementById('gatePrimaryBtn');
+  const secondaryBtn = document.getElementById('gateSecondaryBtn');
+  secondaryBtn.textContent = secondaryText || 'Close';
+  if (onPrimary){
+    primaryBtn.style.display = '';
+    primaryBtn.textContent = primaryText;
+    primaryBtn.onclick = () => { hideTrialGate(); onPrimary(); };
+  } else {
+    primaryBtn.style.display = 'none';
+    primaryBtn.onclick = null;
+  }
+  document.getElementById('trialGateBackdrop').classList.add('active');
+}
+function hideTrialGate(){ document.getElementById('trialGateBackdrop').classList.remove('active'); }
+
+document.getElementById('gateSecondaryBtn').addEventListener('click', hideTrialGate);
+document.getElementById('trialGateBackdrop').addEventListener('click', e => {
+  if (e.target.id === 'trialGateBackdrop') hideTrialGate();
+});
+
+function showTrialGate(){
+  showGateModal({
+    title: "You've used your free evaluation",
+    body: "Sign in with Google to keep evaluating — it's still free, and you'll also get a saved history of every paper you grade.",
+    primaryText: 'Sign in with Google',
+    secondaryText: 'Not now',
+    onPrimary: () => {
+      signInWithPopup(auth, googleProvider).catch(err => {
+        console.error('Sign-in failed:', err);
+        if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request'){
+          alert('Sign-in failed: ' + (err.message || 'please try again.'));
+        }
+      });
+    }
+  });
+}
+
+// Shown when the server rejects grading because the monthly cost-safety
+// cap (per-account or per-network) has been reached — signing in doesn't
+// help here, so there's no primary action, just an acknowledgement.
+function showCapExceededModal(message){
+  showGateModal({
+    title: "You've reached this month's free limit",
+    body: message || 'Total trials/tokens over for this month.',
+    secondaryText: 'Got it'
+  });
+}
 
 function computeTotals(questions){
   return {
@@ -705,7 +785,10 @@ function resetToUpload(){
 }
 document.getElementById('newEvalBtn').addEventListener('click', resetToUpload);
 
-document.getElementById('evalBtn').addEventListener('click', runEvaluation);
+document.getElementById('evalBtn').addEventListener('click', () => {
+  if (!currentUser && hasUsedFreeTrial()){ showTrialGate(); return; }
+  runEvaluation();
+});
 document.getElementById('retryBtn').addEventListener('click', () => showScreen('screen-upload'));
 
 function buildAnswerSheetBatches(){
@@ -726,9 +809,18 @@ function buildAnswerSheetBatches(){
 // away every other batch's already-successful results).
 async function gradeBatch(pageIndices, questionPaperPayload){
   try{
+    // Signed-in users prove who they are with their Firebase ID token, so
+    // the server can enforce the per-account usage cap — anonymous
+    // requests go through without one (the per-network cap still applies).
+    const headers = { 'Content-Type': 'application/json' };
+    if (currentUser){
+      try { headers['Authorization'] = 'Bearer ' + (await currentUser.getIdToken()); }
+      catch(tokenErr){ console.warn('Could not get ID token (grading anonymously for this batch):', tokenErr); }
+    }
+
     const res = await fetch('/api/evaluate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         questionPaperPages: questionPaperPayload,
         answerSheetPages: pageIndices.map(pn => ({
@@ -752,7 +844,12 @@ async function gradeBatch(pageIndices, questionPaperPayload){
         : `Server error (${res.status || 'no response'}).`);
     }
 
-    if (!res.ok) throw new Error(json.error || `Grading failed (${res.status}).`);
+    if (!res.ok){
+      if (res.status === 429 && json.error === 'CAP_EXCEEDED'){
+        return { ok: false, pageIndices, error: json.message || 'Usage cap reached.', capExceeded: true };
+      }
+      throw new Error(json.error || `Grading failed (${res.status}).`);
+    }
     return { ok: true, pageIndices, questions: json.questions || [] };
   } catch(err){
     console.error(`Batch [pages ${pageIndices.join(',')}] failed:`, err);
@@ -797,6 +894,14 @@ async function runEvaluation(){
     const merged = mergeBatchQuestions(successes.flatMap(r => r.questions));
 
     if (merged.length === 0){
+      // Every batch failed for the SAME cap-exceeded reason -> the modal
+      // (retrying/waiting won't help, the message explains why). Otherwise
+      // fall back to the ordinary generic error.
+      if (failures.length && failures.every(f => f.capExceeded)){
+        showScreen('screen-upload');
+        showCapExceededModal(failures[0].error);
+        return;
+      }
       showError(failures.length
         ? 'Grading failed — every page group timed out or errored. Please try again in a moment.'
         : 'No questions could be graded. Try clearer scans, or check that the right files were uploaded.');
@@ -804,10 +909,15 @@ async function runEvaluation(){
     }
 
     lastFailedBatches = failures.map(f => f.pageIndices);
-    buildReport(merged, lastFailedBatches);
+    // A partial cap-exceeded case (cap crossed mid-evaluation, some batches
+    // already graded) — no point offering a "Retry" button for those
+    // specific pages, so pass the message through instead.
+    const capFailure = failures.find(f => f.capExceeded);
+    buildReport(merged, lastFailedBatches, false, capFailure ? capFailure.error : null);
     showScreen('screen-report');
     lastSavedHistoryDocId = null; // fresh evaluation — starts its own history entry, not an update to whatever was open before
     saveEvaluationToHistory(merged, computeTotals(merged));
+    if (!currentUser) markFreeTrialUsed();
   } catch(err){
     console.error(err);
     showError(err.message || 'Could not reach the evaluation service. Check your connection and try again.');
@@ -831,7 +941,8 @@ async function retryFailedBatches(){
   const combined = mergeBatchQuestions([...currentQuestions, ...newSuccesses.flatMap(r => r.questions)]);
 
   lastFailedBatches = stillFailed.map(f => f.pageIndices);
-  buildReport(combined, lastFailedBatches);
+  const capFailure = stillFailed.find(f => f.capExceeded);
+  buildReport(combined, lastFailedBatches, false, capFailure ? capFailure.error : null);
   updateSavedHistory(combined, computeTotals(combined));
 }
 
@@ -921,13 +1032,19 @@ let viewingHistory = false; // true when the report on screen is a reopened hist
 
 const statusLabel = { correct: "Correct", wrong: "Wrong", partial: "Partially wrong", unanswered: "Unanswered" };
 
-function buildReport(questions, failedBatches, isHistory){
+function buildReport(questions, failedBatches, isHistory, capMessage){
   currentQuestions = questions || [];
   viewingHistory = !!isHistory;
   const totals = computeTotals(currentQuestions);
 
   const warningEl = document.getElementById('warningBanner');
-  if (failedBatches && failedBatches.length){
+  if (capMessage){
+    // Some page-groups failed specifically because a usage cap was hit
+    // mid-evaluation — retrying won't help until it resets, so no retry
+    // button here (unlike an ordinary timeout/error below).
+    warningEl.style.display = 'block';
+    warningEl.innerHTML = `⚠️ Couldn't grade ${describePageGroups(failedBatches)}: ${escapeHtml(capMessage)}`;
+  } else if (failedBatches && failedBatches.length){
     warningEl.style.display = 'block';
     warningEl.innerHTML = `⚠️ Couldn't grade ${describePageGroups(failedBatches)} (server timeout or error). Everything else below graded fine. &nbsp;<button id="retryFailedBtn" class="btn-secondary" style="padding:5px 12px;font-size:13px;">Retry those pages</button>`;
     document.getElementById('retryFailedBtn').addEventListener('click', retryFailedBatches);
@@ -1092,7 +1209,13 @@ function renderPage(){
   }
   document.getElementById('prevPage').disabled = idx === 1;
   document.getElementById('nextPage').disabled = idx === total;
-  renderOverlay(activePageSet === 'answer' ? idx : null);
+  // No image behind it means no marks either — otherwise ovals/badges end up
+  // floating over the "no image" placeholder text instead of on a page.
+  if (pages.length){
+    renderOverlay(activePageSet === 'answer' ? idx : null);
+  } else {
+    document.getElementById('overlayLayer').innerHTML = '';
+  }
   renderQlist();
 }
 
