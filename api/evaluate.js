@@ -9,6 +9,15 @@
 //
 // GEMINI_API_KEY lives only in Vercel's environment variables — it is never
 // sent to, or readable by, the browser.
+//
+// FIREBASE_SERVICE_ACCOUNT_JSON is a second, separate secret env var (also
+// Vercel-only, never sent to the browser) — the full JSON key file content
+// from Firebase Console > Project Settings > Service Accounts > Generate
+// new private key, pasted in as-is. It's used only to verify who's signed
+// in and to read/write the usage-cap counters below; it can't touch the
+// Gemini API key or anything else.
+
+import admin from 'firebase-admin';
 
 export const config = {
   api: {
@@ -18,6 +27,139 @@ export const config = {
 
 const GEMINI_MODEL = 'gemini-3.6-flash';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
+/* =====================================================================
+ * COST-SAFETY CAPS (server-side, real money protection)
+ * ---------------------------------------------------------------------
+ * Two independent monthly caps, whichever is hit first blocks further
+ * grading until the next calendar month:
+ *   - PER-USER  : 5 evaluations OR ₹40 spent (signed-in users, by uid)
+ *   - PER-IP    : 15 evaluations OR ₹150 spent (shared by everyone
+ *                 grading from the same network — anonymous users, or
+ *                 someone cycling through fresh Google accounts, both
+ *                 land on the same IP bucket)
+ * Pricing is Google's official gemini-3.6-flash rate (input $0.75 / 1M
+ * tokens, output incl. thinking $3.75 / 1M tokens, valid through Dec 31
+ * 2026 — https://ai.google.dev/gemini-api/docs/pricing) converted at a
+ * deliberately rounded ₹100/USD so real rupee spend stays UNDER the
+ * cap, not over it, as the exchange rate drifts.
+ * ===================================================================== */
+const INR_PER_USD = 100; // rounded up on purpose — see note above
+const INPUT_PAISE_PER_MILLION_TOKENS = 0.75 * INR_PER_USD * 100;   // 7500
+const OUTPUT_PAISE_PER_MILLION_TOKENS = 3.75 * INR_PER_USD * 100;  // 37500 (covers thinking tokens too)
+
+const USER_MONTHLY_CAP = { count: 5, paise: 4000 };   // ₹40
+const IP_MONTHLY_CAP = { count: 15, paise: 15000 };    // ₹150
+
+const CAP_MESSAGE = 'Total trials/tokens over for this month. Connect - +91 861 819 7603, for more free trials.';
+
+function costPaiseForTokens(promptTokenCount, totalTokenCount) {
+  const input = promptTokenCount || 0;
+  const output = Math.max(0, (totalTokenCount || 0) - input); // candidates + thinking, bundled
+  return Math.round(
+    (input * INPUT_PAISE_PER_MILLION_TOKENS + output * OUTPUT_PAISE_PER_MILLION_TOKENS) / 1_000_000
+  );
+}
+
+function monthKey(d = new Date()) {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function getClientIp(req) {
+  // Vercel's edge network sets/prepends the real client IP as the first
+  // entry of x-forwarded-for — a client-supplied fake value can't get in
+  // front of it.
+  const fwd = req.headers['x-forwarded-for'];
+  const ip = (Array.isArray(fwd) ? fwd[0] : fwd || '').split(',')[0].trim();
+  return (ip || 'unknown-ip').replace(/[.:]/g, '-'); // Firestore-doc-id-safe
+}
+
+// Lazily initializes firebase-admin only if a service account key is
+// configured. If it isn't set (yet), caps are skipped entirely rather than
+// blocking everyone's grading over a missing/misconfigured env var — see
+// README for the one-time setup step. Returns true/false ("is admin usable
+// right now"), not the app itself — admin.firestore()/admin.auth() below
+// always operate on the one default app once initializeApp() has run.
+let adminReady = null;
+function ensureAdminInitialized() {
+  if (adminReady !== null) return adminReady; // already resolved
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (!raw) {
+    console.warn('FIREBASE_SERVICE_ACCOUNT_JSON not set — usage caps are DISABLED, grading is unlimited.');
+    adminReady = false;
+    return adminReady;
+  }
+  try {
+    if (!admin.apps.length) {
+      const serviceAccount = JSON.parse(raw);
+      admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    }
+    adminReady = true;
+  } catch (e) {
+    console.error('Failed to initialize firebase-admin from FIREBASE_SERVICE_ACCOUNT_JSON:', e.message);
+    adminReady = false;
+  }
+  return adminReady;
+}
+
+// Verifies the Firebase ID token on the Authorization header, if present.
+// Returns the uid, or null if there's no token, it's invalid, or admin
+// isn't configured — grading proceeds anonymously (IP cap still applies).
+async function verifyUidFromRequest(req) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : null;
+  if (!token || !ensureAdminInitialized()) return null;
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    return decoded.uid;
+  } catch (e) {
+    console.warn('ID token verification failed (treating request as anonymous):', e.message);
+    return null;
+  }
+}
+
+// Reads this month's counters for a user and/or an IP and reports whether
+// either cap is already exceeded, BEFORE any Gemini call is made (so a
+// capped request never costs anything).
+async function checkQuota(uid, ip) {
+  if (!ensureAdminInitialized()) return { blocked: false }; // admin not configured — caps disabled
+  const db = admin.firestore();
+  const mk = monthKey();
+
+  const reads = [db.collection('ipUsage').doc(`${ip}_${mk}`).get()];
+  if (uid) reads.push(db.collection('usage').doc(`${uid}_${mk}`).get());
+  const [ipSnap, uidSnap] = await Promise.all(reads);
+
+  if (uidSnap) {
+    const d = uidSnap.data() || {};
+    if ((d.count || 0) >= USER_MONTHLY_CAP.count || (d.paise || 0) >= USER_MONTHLY_CAP.paise) {
+      return { blocked: true, message: CAP_MESSAGE };
+    }
+  }
+  const ipData = ipSnap.data() || {};
+  if ((ipData.count || 0) >= IP_MONTHLY_CAP.count || (ipData.paise || 0) >= IP_MONTHLY_CAP.paise) {
+    return { blocked: true, message: CAP_MESSAGE };
+  }
+  return { blocked: false };
+}
+
+// Records what this batch call actually spent, regardless of whether the
+// grading ultimately succeeded — a failed-after-retry call still burned
+// two real Gemini requests. Best-effort: a Firestore error here never
+// blocks the response the user is waiting on.
+async function recordUsage(uid, ip, paise) {
+  if (!ensureAdminInitialized() || paise <= 0) return;
+  try {
+    const db = admin.firestore();
+    const mk = monthKey();
+    const inc = { count: admin.firestore.FieldValue.increment(1), paise: admin.firestore.FieldValue.increment(paise) };
+    const writes = [db.collection('ipUsage').doc(`${ip}_${mk}`).set(inc, { merge: true })];
+    if (uid) writes.push(db.collection('usage').doc(`${uid}_${mk}`).set(inc, { merge: true }));
+    await Promise.all(writes);
+  } catch (e) {
+    console.error('recordUsage failed (non-fatal):', e.message);
+  }
+}
 
 // Note: no "totals" in this schema anymore — the frontend computes totals
 // itself after merging every batch's questions together, which is more
@@ -161,9 +303,12 @@ function salvagePartialQuestions(text) {
   }
 }
 
-// Calls Gemini once and returns { ok, questions, recovered, raw, status, errText }.
+// Calls Gemini once and returns { ok, questions, recovered, raw, status, errText, paise }.
 // Never throws on a bad/unparseable model response — that's handled here via
-// salvage, so the caller can decide whether to retry.
+// salvage, so the caller can decide whether to retry. "paise" is the real
+// cost of THIS call (from Gemini's own usageMetadata) whenever Gemini
+// actually ran, even if grading ultimately failed — a looping/unparseable
+// response still burned real tokens and must still be counted.
 async function gradeOnce(requestBody, apiKey, shownPageNumbers) {
   const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
     method: 'POST',
@@ -174,28 +319,30 @@ async function gradeOnce(requestBody, apiKey, shownPageNumbers) {
   if (!geminiRes.ok) {
     const errText = await geminiRes.text();
     console.error('Gemini API error:', geminiRes.status, errText);
-    return { ok: false, status: geminiRes.status, errText };
+    return { ok: false, status: geminiRes.status, errText, paise: 0 }; // request rejected before running — nothing billed
   }
 
   const geminiJson = await geminiRes.json();
+  const usage = geminiJson?.usageMetadata || {};
+  const paise = costPaiseForTokens(usage.promptTokenCount, usage.totalTokenCount);
   const textPart = geminiJson?.candidates?.[0]?.content?.parts?.[0]?.text;
 
   if (!textPart) {
     const blockReason = geminiJson?.promptFeedback?.blockReason;
-    return { ok: false, status: 502, errText: blockReason ? `blocked (${blockReason})` : 'empty response' };
+    return { ok: false, status: 502, errText: blockReason ? `blocked (${blockReason})` : 'empty response', paise };
   }
 
   try {
     const result = JSON.parse(textPart);
-    return { ok: true, questions: result.questions || [], recovered: false };
+    return { ok: true, questions: result.questions || [], recovered: false, paise };
   } catch (e) {
     const salvaged = salvagePartialQuestions(textPart);
     if (salvaged && salvaged.length > 0) {
       console.warn(`Batch [pages ${shownPageNumbers}]: response broke before closing (${textPart.length} chars) — salvaged ${salvaged.length} complete question(s) from before the break.`);
-      return { ok: true, questions: salvaged, recovered: true };
+      return { ok: true, questions: salvaged, recovered: true, paise };
     }
     console.error(`Batch [pages ${shownPageNumbers}]: failed to parse and nothing salvageable. First 500 chars:`, textPart.slice(0, 500));
-    return { ok: false, status: 502, errText: 'unparseable response, nothing salvageable' };
+    return { ok: false, status: 502, errText: 'unparseable response, nothing salvageable', paise };
   }
 }
 
@@ -208,6 +355,17 @@ export default async function handler(req, res) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     res.status(500).json({ error: 'Server is missing GEMINI_API_KEY. Set it in your Vercel project settings.' });
+    return;
+  }
+
+  // Cost-safety cap check — BEFORE any Gemini call, so a capped request
+  // never costs anything. uid is null for anonymous requests (no/invalid
+  // Authorization header); the IP cap still applies either way.
+  const clientIp = getClientIp(req);
+  const uid = await verifyUidFromRequest(req);
+  const quota = await checkQuota(uid, clientIp);
+  if (quota.blocked) {
+    res.status(429).json({ error: 'CAP_EXCEEDED', message: quota.message });
     return;
   }
 
@@ -265,8 +423,10 @@ export default async function handler(req, res) {
     }
   };
 
+  let totalPaise = 0; // real spend across both attempts, recorded no matter how this ends
   try {
     let attempt = await gradeOnce(requestBody, apiKey, shownPageNumbers);
+    totalPaise += attempt.paise || 0;
 
     if (!attempt.ok) {
       // One retry, at a HIGHER temperature (not lower). A degenerate
@@ -280,10 +440,12 @@ export default async function handler(req, res) {
         generationConfig: { ...requestBody.generationConfig, temperature: 0.4 }
       };
       attempt = await gradeOnce(retryBody, apiKey, shownPageNumbers);
+      totalPaise += attempt.paise || 0;
     }
 
     if (!attempt.ok) {
       console.error(`Batch [pages ${shownPageNumbers}]: failed after retry too (${attempt.status}: ${attempt.errText || 'no detail'}).`);
+      await recordUsage(uid, clientIp, totalPaise); // both attempts still cost real money even though grading failed
       res.status(502).json({ error: `Could not grade page(s) ${shownPageNumbers}, even after a retry. Please try again.` });
       return;
     }
@@ -291,9 +453,11 @@ export default async function handler(req, res) {
     const qSummary = attempt.questions.map(q => `Q${q.questionNumber}(p${q.page},${q.status})`).join(', ') || '(none)';
     console.log(`Batch [pages ${shownPageNumbers}]: returned ${attempt.questions.length} question(s)${attempt.recovered ? ' [recovered from a broken/looping response]' : ''}: ${qSummary}`);
 
+    await recordUsage(uid, clientIp, totalPaise);
     res.status(200).json({ questions: attempt.questions });
   } catch (err) {
     console.error('Evaluation error:', err);
+    await recordUsage(uid, clientIp, totalPaise);
     res.status(500).json({ error: `Unexpected server error grading page(s) ${shownPageNumbers}.` });
   }
 }
