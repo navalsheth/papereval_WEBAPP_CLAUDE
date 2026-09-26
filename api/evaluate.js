@@ -197,6 +197,18 @@ const RESPONSE_SCHEMA = {
             type: 'STRING',
             description: 'What that line should be, in LaTeX. Omit if correct or unanswered.'
           },
+          // --- ANALYSIS SEGMENT fields (see ANALYSIS_SEGMENT_PROMPT_RULES
+          // above) — both optional, same pattern as mistakeCorrect: only
+          // ever set for "wrong"/"partial" questions, omitted otherwise.
+          mistakeType: {
+            type: 'STRING',
+            enum: ['silly', 'conceptual', 'both'],
+            description: 'ANALYSIS SEGMENT — classification of the mistake at mistakeStep: "silly" (execution slip, student already knew the rule), "conceptual" (a real misunderstanding of the underlying concept), or "both". OMIT this field entirely if it is genuinely unclear which bucket applies — never force a guess. Omit for "correct"/"unanswered" questions.'
+          },
+          mistakeExplanation: {
+            type: 'STRING',
+            description: 'ANALYSIS SEGMENT — a short, plain-English diagnosis (1-2 sentences) of WHAT the mistake at mistakeStep actually is, separate from mistakeCorrect (which only gives the fix). Wrap any math in $...$. Omit for "correct"/"unanswered" questions.'
+          },
           markPage: {
             type: 'INTEGER',
             description: 'The TRUE page number that "mistakeBox" is drawn on — i.e. the page whose image actually shows the specific content the box points to. For most questions this is identical to "page". They DIFFER only when a question\'s working spans a page break (see CONTINUATIONS ACROSS A PAGE BREAK above): "page" stays the page where the question started, but if the exact content being boxed (the mistake line / final answer / blank space) is physically on the following page instead, set "markPage" to THAT page. Getting this right matters — mistakeBox\'s coordinates are only meaningful on the one page image they were read from; placing them under the wrong page number puts the mark in a visually plausible but wrong spot on a different page.'
@@ -227,7 +239,19 @@ const RESPONSE_SCHEMA = {
   required: ['questions']
 };
 
-const SYSTEM_INSTRUCTION = `You are grading a student's handwritten answer sheet against a question paper, page by page.
+/* =====================================================================
+ * PROMPT CHANNELS — kept as separate, independently-editable sections so
+ * a change to one never risks the others (per project convention):
+ *   1. EVALUATION_PROMPT_RULES       — grading a paper (unchanged below)
+ *   2. ANALYSIS_SEGMENT_PROMPT_RULES — classifying each mistake (new)
+ *   3. (future, Phase 6) a PAPER_CREATION_PROMPT_RULES constant for
+ *      practice-paper generation — not built yet, will live here too.
+ * They're combined into one SYSTEM_INSTRUCTION string only because a
+ * single Gemini call already grades AND classifies in the same pass
+ * (one call per page-batch, not two) — the separation that matters is in
+ * the code, not necessarily in how many API calls are made.
+ * ===================================================================== */
+const EVALUATION_PROMPT_RULES = `You are grading a student's handwritten answer sheet against a question paper, page by page.
 
 IMPORTANT — you are only being shown SOME of the answer sheet's pages in this call (a small overlapping window of the full paper, described below), not the whole thing. This is intentional:
 - Only include a question in your response if its COMPLETE working is fully visible within the pages you were given this time.
@@ -244,7 +268,7 @@ Non-negotiable rules for every question you DO include:
 1. In "written", reproduce EXACTLY what the student wrote — every step, in their own notation. Do not correct spelling, do not fill in missing steps, do not "clean up" their working. Never invent a step they did not write.
 2. If any part of the handwriting is illegible or ambiguous, write the literal string "<unclear>" in place of that part. Never guess at unclear content.
 3. If a question's problem statement is visible and there is no solution attempt under it at all, set status to "unanswered" and written to an empty array — include it, do not leave it out (see the blank-question note above; this is the single most common way a real question quietly disappears from the report, so err on the side of including it as unanswered).
-4. Formatting: write each field as plain text, and wrap ONLY the mathematical notation in single dollar signs, e.g. "Evaluate $\\int \\frac{1}{\\sqrt{3-4x}}\\,dx$". Keep ordinary words (labels like "Evaluate", "Solve for x", short explanations) as plain text outside the dollar signs — do not put whole sentences inside math mode. Inside the dollar signs use proper LaTeX (\\frac{a}{b}, \\sin, \\sqrt{}, ^{}, _{}, etc). The mathematical content itself must still be an exact copy of what was written, never rewritten or simplified — this formatting rule only affects how it's typeset, never what it says.
+4. Formatting: write each field as plain text, and wrap ONLY the mathematical notation in single dollar signs, e.g. "Evaluate $\\int \\frac{1}{\\sqrt{3-4x}}\\,dx$". Keep ordinary words (labels like "Evaluate", "Solve for x", short explanations) as plain text outside the dollar signs — do not put whole sentences inside math mode. Inside the dollar signs use proper LaTeX (\\frac{a}{b}, \\sin, \\sqrt{}, ^{}, _{}, etc). The mathematical content itself must still be an exact copy of what was written, never rewritten or simplified — this formatting rule only affects how it's typeset, never what it says. THIS RULE MATTERS MOST on a long, multi-clause step (e.g. a substitution step that continues "... then $dt = ...$, so $x^2\\,dx = ...$") — every single piece of notation needs its OWN pair of dollar signs, every time, even the fourth or fifth one in the same step. It is a common mistake to open a $ for the first bit of math in a step and then, later in that same step, forget to add a new pair around a later formula — that formula then displays as broken-looking raw text instead of typeset math. When in doubt, use MORE separate $...$ pairs (one per fragment) rather than fewer.
 5. Grading status:
    - "correct": final answer and method are both correct.
    - "wrong": the final answer is incorrect.
@@ -258,6 +282,26 @@ Non-negotiable rules for every question you DO include:
 10. "page" must be the TRUE page number given to you for each image below, not a 1/2 count of how many images were in this call. "markPage" must be the TRUE page number of whichever image the "mistakeBox" content is actually visible on — equal to "page" unless this is a page-spanning question and the boxed content is on the later page (see CONTINUATIONS above).
 11. Keep every field strictly to its content. Never include comments about your own output, formatting notes, apologies, or any meta text of any kind in any field.
 12. Return ONLY JSON matching the provided schema — no prose, no markdown fences, no commentary outside the JSON.`;
+
+// ANALYSIS SEGMENT PROMPT — a distinct, separately-editable section (task
+// #11). Runs for every "wrong"/"partial" question alongside grading above,
+// classifying the mistake so the frontend can label it and show a short
+// diagnosis popup. Criteria supplied by the user, kept close to verbatim.
+const ANALYSIS_SEGMENT_PROMPT_RULES = `
+=====================================================================
+ANALYSIS SEGMENT — classifying each mistake (Silly vs Conceptual)
+=====================================================================
+For every question graded "wrong" or "partial", act as an expert Mathematics Educator and Diagnostic Evaluator and classify the mistake at mistakeStep using the "mistakeType" field. The rules below are NON-EXHAUSTIVE illustrations — apply the definitions and threshold tests dynamically to the actual work shown, never pattern-match against memorized examples.
+
+1. "silly" (Execution Error): the student demonstrates clear knowledge of the correct concept, rule, or formula, but makes an accidental slip in computation, writing, or basic operational rules — or misses part of the equation, or miscopies the question. Threshold test: if pointed to the line without explanation, would the student immediately correct it because they already know the underlying rule? If yes, this is "silly".
+2. "conceptual" (Understanding Error): the student uses an incorrect formula, misapplies a fundamental mathematical law, shows structural ignorance of a definition, or uses invalid logical reasoning. Threshold test: does the student's work reflect a fundamental misunderstanding of how the concept works? If yes, this is "conceptual".
+3. "both": if a single step contains BOTH a genuine conceptual flaw and a separate execution slip, use "both" rather than picking one.
+4. If there is real confusion about which bucket a mistake belongs to, OMIT the "mistakeType" field entirely rather than forcing a guess — an honestly-unclassified mistake is better than a wrongly-labeled one.
+
+Also fill "mistakeExplanation" for every "wrong"/"partial" question: a short, plain-English diagnosis (1-2 sentences max) of WHAT the mistake actually is — distinct from "mistakeCorrect", which only states what the line should have been instead. Example: "Divided both sides by x without checking whether x could be zero." Wrap any math notation inside it in $...$ exactly like other fields, keeping the surrounding English words outside the dollar signs. Omit both "mistakeType" and "mistakeExplanation" for "correct"/"unanswered" questions.
+`;
+
+const SYSTEM_INSTRUCTION = EVALUATION_PROMPT_RULES + '\n' + ANALYSIS_SEGMENT_PROMPT_RULES;
 
 // Recovers as many COMPLETE question objects as possible from a response
 // that broke before the JSON could close (e.g. the model got stuck in a
