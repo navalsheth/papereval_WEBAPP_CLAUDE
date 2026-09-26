@@ -1107,7 +1107,7 @@ function renderQlist(){
     return `
     <div class="qrow" data-page="${q.page}" id="qrow-${q.id}">
       <button class="qrow-head" aria-expanded="false">
-        <span class="qtitle"><span class="qnum">Q${escapeHtml(String(q.questionNumber ?? q.id).replace(/^[Qq]\s*/, ''))}</span>${pageTag}${escapeHtml(q.title || '')}</span>
+        <span class="qtitle"><span class="qnum">Q${escapeHtml(String(q.questionNumber ?? q.id).replace(/^[Qq]\s*/, ''))}</span>${pageTag}${escapeHtml(ensureMathDelimited(q.title || ''))}</span>
         <span class="qmeta">
           ${q._conflicting ? `<span class="pill conflict" title="Graded differently across two passes — please double-check this one">⚠ Review</span>` : ''}
           <span class="pill ${q.status}">${statusLabel[q.status] || q.status}</span>
@@ -1116,16 +1116,16 @@ function renderQlist(){
       </button>
       <div class="qbody">
         ${renderSub('Solution written', q.id, 'written',
-          (q.written && q.written.length) ? q.written.map((s,idx)=>`<div class="step-line"><span class="step-num">Step ${idx+1}</span>${escapeHtml(s)}</div>`).join('')
+          (q.written && q.written.length) ? q.written.map((s,idx)=>`<div class="step-line"><span class="step-num">Step ${idx+1}</span>${escapeHtml(ensureMathDelimited(s))}</div>`).join('')
                      : `<span class="unclear">No working found on the page.</span>`)}
         ${renderSub('Mistake', q.id, 'mistake',
           (hasMistake || q.mistakeCorrect) ? `<div class="mistake-block"><div class="lbl">${q.mistakeStep ? 'On step ' + q.mistakeStep : 'Mistake'}</div>
-              ${mistakeWrittenLine ? `<div>Written: ${escapeHtml(mistakeWrittenLine)}</div>` : ''}
-              ${q.mistakeCorrect ? `<div style="margin-top:6px;">Should be: ${escapeHtml(q.mistakeCorrect)}</div>` : ''}</div>`
+              ${mistakeWrittenLine ? `<div>Written: ${escapeHtml(ensureMathDelimited(mistakeWrittenLine))}</div>` : ''}
+              ${q.mistakeCorrect ? `<div style="margin-top:6px;">Should be: ${escapeHtml(ensureMathDelimited(q.mistakeCorrect))}</div>` : ''}</div>`
               : (q.status==='unanswered' ? `<span class="unclear">No attempt to mark.</span>` : `<span class="unclear">No mistakes — fully correct.</span>`))}
         ${renderSub('Correct solution', q.id, 'correct',
-          (Array.isArray(q.correctSolution) && q.correctSolution.length) ? q.correctSolution.map((s,idx)=>`<div class="step-line"><span class="step-num">Step ${idx+1}</span>${escapeHtml(s)}</div>`).join('')
-                     : `<div class="step-line">${escapeHtml(q.correctSolution || '')}</div>`)}
+          (Array.isArray(q.correctSolution) && q.correctSolution.length) ? q.correctSolution.map((s,idx)=>`<div class="step-line"><span class="step-num">Step ${idx+1}</span>${escapeHtml(ensureMathDelimited(s))}</div>`).join('')
+                     : `<div class="step-line">${escapeHtml(ensureMathDelimited(q.correctSolution || ''))}</div>`)}
       </div>
     </div>
   `;
@@ -1184,6 +1184,36 @@ function escapeHtml(str){
   const div = document.createElement('div');
   div.textContent = str == null ? '' : String(str);
   return div.innerHTML;
+}
+
+// Safety net for the "sometimes math shows as raw LaTeX source instead of
+// being typeset" bug. The prompt asks Gemini to wrap ONLY the math in
+// $...$ so KaTeX's auto-render (which only looks for $...$) can find it —
+// most of the time it does, but on longer/denser steps it occasionally
+// drops the delimiters partway through, or for a field entirely. Rather
+// than trying to make the model 100% consistent (unreliable), this repairs
+// it after the fact: a backslash immediately followed by a letter
+// (\frac, \int, \Rightarrow, \log, ...) or a bare ^{ / _{ is essentially
+// never legitimate plain English, so wherever that shows up OUTSIDE an
+// existing $...$ pair, wrap just that piece in one. Text already correctly
+// wrapped is left completely untouched.
+const LATEX_HINT_RE = /\\[a-zA-Z]|\^\{|_\{/;
+function ensureMathDelimited(str){
+  if (typeof str !== 'string' || !str) return str;
+  const parts = str.split(/(\$[^$]*\$)/g); // capturing group keeps the $...$ runs in the array, in order
+  return parts.map(part => {
+    if (part.startsWith('$') && part.endsWith('$') && part.length > 1) return part; // already delimited — untouched
+    const m = LATEX_HINT_RE.exec(part);
+    if (!m) return part; // nothing math-looking in this piece at all
+    // Wrap from the hint onward, but first walk the cut point back over any
+    // immediately-touching non-space characters (e.g. the "x" right before
+    // "^{", or a coefficient right before "\pi") so a math token isn't
+    // split in half — while a genuine English word before it (separated by
+    // a space) is left alone outside the wrap.
+    let cut = m.index;
+    while (cut > 0 && !/\s/.test(part[cut - 1])) cut--;
+    return part.slice(0, cut) + '$' + part.slice(cut) + '$';
+  }).join('');
 }
 
 function renderPage(){
