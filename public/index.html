@@ -47,6 +47,18 @@
   button{font-family:inherit;}
   .app{max-width:1120px;margin:0 auto;padding:0 20px 60px;}
   .topbar{display:flex;align-items:center;justify-content:space-between;padding:22px 4px 18px;flex-wrap:wrap;gap:10px;}
+  .sidebar-toggle{background:none;border:1px solid var(--border);border-radius:8px;width:38px;height:38px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--ink);flex-shrink:0;margin-right:2px;}
+  .sidebar-toggle:hover{border-color:var(--teal);color:var(--teal);}
+  .sidebar-backdrop{position:fixed;inset:0;background:rgba(10,16,22,0.45);z-index:1050;display:none;}
+  .sidebar-backdrop.active{display:block;}
+  .sidebar{position:fixed;top:0;left:0;bottom:0;width:270px;max-width:82vw;background:var(--card);border-right:1px solid var(--border);z-index:1060;transform:translateX(-100%);transition:transform .22s ease;display:flex;flex-direction:column;padding:10px;box-shadow:4px 0 20px rgba(0,0,0,0.12);}
+  .sidebar.open{transform:translateX(0);}
+  .sidebar-head{display:flex;align-items:center;justify-content:space-between;padding:10px 8px 16px;}
+  .sidebar-title{font-family:'Source Serif 4',serif;font-size:16px;font-weight:600;color:var(--ink);}
+  .sidebar-close{background:none;border:none;font-size:16px;color:var(--muted);cursor:pointer;padding:4px 8px;}
+  .sidebar-link{display:flex;align-items:center;gap:10px;text-align:left;width:100%;background:none;border:none;border-radius:8px;padding:12px 10px;font-size:14.5px;font-weight:600;color:var(--ink);cursor:pointer;}
+  .sidebar-link:hover{background:var(--paper);}
+  .sidebar-link.active{background:var(--teal-soft);color:var(--teal);}
   .topbar-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
   .auth-chip{display:flex;align-items:center;gap:8px;}
   .auth-avatar{width:26px;height:26px;border-radius:50%;object-fit:cover;}
@@ -217,6 +229,29 @@
   @media (hover:hover) and (pointer:fine){ .overlay-mark:hover .mistake-popup{opacity:1;visibility:visible;pointer-events:auto;} }
   .lightbox-img-wrap .overlay-layer{position:absolute;inset:0;}
 
+  /* Practice-paper screen (Phase 6) — reuses the same silly/conceptual/
+     both color scheme as the mistake marks above, via mistakeTypeMeta(). */
+  .practice-q{border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:12px;background:var(--card);}
+  .practice-q-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:4px;}
+  .practice-q-num{color:var(--teal);font-weight:700;margin-right:6px;}
+  .practice-q-text{font-size:14.5px;line-height:1.6;color:var(--ink);flex:1;}
+  .practice-q-tag{font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;white-space:nowrap;flex-shrink:0;color:#fff;font-family:'Inter',sans-serif;}
+  .practice-q-tag.silly{background:#CA8A04;}
+  .practice-q-tag.conceptual{background:#E11D2E;}
+  .practice-q-tag.both{background:#C2410C;}
+
+  /* Print-to-PDF (task spec: "pure readable format and not latex" — this
+     reuses the same already-working KaTeX rendering on screen, so the
+     printed/PDF output shows real typeset math, never raw LaTeX source).
+     Hides everything except the practice-paper screen's own content, and
+     .no-print elements (the Download button itself) within it. */
+  @media print{
+    body *{visibility:hidden;}
+    #screen-practice, #screen-practice *{visibility:visible;}
+    #screen-practice{position:absolute;left:0;top:0;width:100%;}
+    .no-print{display:none !important;}
+  }
+
   .qlist{max-height:640px;overflow-y:auto;}
   .empty-msg{padding:32px 16px;color:var(--muted);font-size:13.5px;text-align:center;}
   .qrow{border-bottom:1px solid var(--border);}
@@ -259,8 +294,22 @@
 </style>
 </head>
 <body>
+<div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+<nav class="sidebar" id="sidebar">
+  <div class="sidebar-head">
+    <span class="sidebar-title">Menu</span>
+    <button class="sidebar-close" id="sidebarClose" type="button" aria-label="Close menu">✕</button>
+  </div>
+  <button class="sidebar-link" id="navNewEval" type="button" data-screen="screen-upload">📄 New Evaluation</button>
+  <button class="sidebar-link" id="navHistory" type="button" data-screen="screen-history">📚 Past Evaluated Papers</button>
+  <button class="sidebar-link" id="navPracticeHistory" type="button" data-screen="screen-practice-history">📝 Past Generated Papers</button>
+</nav>
+
 <div class="app">
   <div class="topbar">
+    <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Open menu">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
     <div class="wordmark">
       <svg width="30" height="30" viewBox="0 0 40 40" fill="none">
         <rect x="1.5" y="1.5" width="37" height="37" rx="9" stroke="var(--navy)" stroke-width="2"/>
@@ -337,7 +386,10 @@
   <section id="screen-report" class="screen">
     <div class="report-title-row" id="reportTitleRow" style="display:none;">
       <span class="report-title" id="reportTitleText"></span>
-      <button class="rename-btn" id="renamePaperBtn" type="button" title="Rename this evaluation">✏️ Rename</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="rename-btn" id="renamePaperBtn" type="button" title="Rename this evaluation">✏️ Rename</button>
+        <button class="rename-btn" id="practicePaperBtn" type="button" title="Generate a practice paper from your mistakes" style="display:none;">📝 Practice Paper</button>
+      </div>
     </div>
     <div class="warning-banner" id="warningBanner" style="display:none;"></div>
     <div class="stats-bar" id="statsBar"></div>
@@ -370,10 +422,27 @@
 
   <section id="screen-history" class="screen">
     <div class="ruled" style="padding:24px 4px 8px;">
-      <h1 style="font-size:22px;margin-bottom:6px;">Your evaluation history</h1>
+      <h1 style="font-size:22px;margin-bottom:6px;">Past Evaluated Papers</h1>
       <p style="color:var(--muted);font-size:13.5px;">Evaluations you graded while signed in. Only the graded report is saved — page images aren't kept, so mistake marks on the image aren't available here.</p>
     </div>
     <div id="historyList" style="padding:8px 4px 24px;"></div>
+  </section>
+
+  <section id="screen-practice-history" class="screen">
+    <div class="ruled" style="padding:24px 4px 8px;">
+      <h1 style="font-size:22px;margin-bottom:6px;">Past Generated Papers</h1>
+      <p style="color:var(--muted);font-size:13.5px;">Practice papers PaperEval built for you from past mistakes.</p>
+    </div>
+    <div id="practiceHistoryList" style="padding:8px 4px 24px;"></div>
+  </section>
+
+  <section id="screen-practice" class="screen">
+    <div class="report-title-row" id="practiceTitleRow">
+      <span class="report-title" id="practiceTitleText">Practice Paper</span>
+      <button class="rename-btn no-print" id="downloadPracticeBtn" type="button">⬇️ Download PDF</button>
+    </div>
+    <p style="color:var(--muted);font-size:13px;margin:-4px 0 18px;">Same questions you got wrong or partially wrong last time — good for a second attempt.</p>
+    <div id="practiceQlist"></div>
   </section>
 </div>
 
@@ -478,10 +547,11 @@ function renderAuthArea(){
       <div class="auth-chip">
         ${avatar}
         <span class="auth-name">${firstName}</span>
-        <button class="auth-link" id="historyBtn" type="button">History</button>
         <button class="auth-link" id="signOutBtn" type="button">Sign out</button>
       </div>`;
-    document.getElementById('historyBtn').addEventListener('click', openHistory);
+    // "History" used to live here — it now lives in the sidebar (Past
+    // Evaluated Papers / Past Generated Papers), reachable regardless of
+    // where in the app you are, not just from the topbar.
     document.getElementById('signOutBtn').addEventListener('click', () => signOut(auth));
   } else {
     el.innerHTML = `<button class="btn-secondary" id="signInBtn" type="button">Sign in with Google</button>`;
@@ -734,6 +804,167 @@ document.getElementById('renamePaperBtn').addEventListener('click', async () => 
     catch(err){ console.error('Could not save the new name:', err); }
   }
 });
+
+// ---------------------------------------------------------------------
+// Phase 6 — Practice Paper generation (the "Papers" button on the report
+// screen). Sends only the wrong/partial questions' TEXT plus their
+// already-decided mistakeType (task #11 — reused as-is, never re-derived
+// here) to a separate endpoint/prompt channel (api/generate-practice.js)
+// that returns the SAME questions, cleaned up and renumbered — never new
+// or different ones. PDF export reuses the browser's own print-to-PDF (no
+// new library) so the already-working KaTeX math rendering carries
+// straight through into the PDF instead of raw LaTeX source.
+// ---------------------------------------------------------------------
+let currentPracticeQuestions = [];
+let currentPracticeTitle = '';
+let lastSavedPracticeDocId = null; // the Firestore doc for the practice paper currently on screen, if any
+
+function renderPracticeQuestions(title, questions){
+  currentPracticeQuestions = questions || [];
+  currentPracticeTitle = title || 'Practice Paper';
+  document.getElementById('practiceTitleText').textContent = currentPracticeTitle;
+
+  const listEl = document.getElementById('practiceQlist');
+  if (!currentPracticeQuestions.length){
+    listEl.innerHTML = `<div class="empty-msg">No questions in this practice paper.</div>`;
+    return;
+  }
+  listEl.innerHTML = currentPracticeQuestions.map(q => {
+    const { typeClass, typeLabelText } = mistakeTypeMeta(q.mistakeType);
+    const tag = typeLabelText ? `<span class="practice-q-tag ${typeClass}">${escapeHtml(typeLabelText)}</span>` : '';
+    return `
+      <div class="practice-q">
+        <div class="practice-q-head">
+          <div class="practice-q-text"><span class="practice-q-num">Q${escapeHtml(String(q.number))}.</span>${escapeHtml(ensureMathDelimited(q.questionText || ''))}</div>
+          ${tag}
+        </div>
+      </div>`;
+  }).join('');
+  renderMath(listEl); // typeset the $...$ math — see the "pure readable, not LaTeX" note above
+}
+
+async function generatePracticePaper(){
+  if (!currentUser){ alert('Sign in to generate a practice paper.'); return; }
+  const wrongOrPartial = currentQuestions.filter(q => q.status === 'wrong' || q.status === 'partial');
+  if (!wrongOrPartial.length){ alert('No wrong or partially-wrong questions to build a practice paper from.'); return; }
+
+  const btn = document.getElementById('practicePaperBtn');
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    headers['Authorization'] = 'Bearer ' + (await currentUser.getIdToken());
+
+    const res = await fetch('/api/generate-practice', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        sourceLabel: currentPaperLabel || defaultPaperLabel(),
+        questions: wrongOrPartial.map(q => ({
+          questionNumber: q.questionNumber,
+          title: q.title,
+          mistakeType: q.mistakeType
+        }))
+      })
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok){
+      alert(data.error || 'Could not generate the practice paper. Please try again.');
+      return;
+    }
+
+    lastSavedPracticeDocId = null;
+    renderPracticeQuestions(data.title, data.questions);
+    showScreen('screen-practice');
+    savePracticePaperToHistory(data.title, data.questions, currentPaperLabel || defaultPaperLabel());
+  } catch(err){
+    console.error('Practice paper generation failed:', err);
+    alert('Could not generate the practice paper. Please check your connection and try again.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
+}
+document.getElementById('practicePaperBtn').addEventListener('click', generatePracticePaper);
+document.getElementById('downloadPracticeBtn').addEventListener('click', () => window.print());
+
+// Auto-saved right after generation, under "Practice Papers (Based on Past
+// Mistakes)" — i.e. the #screen-practice-history list below. Non-fatal if
+// it fails: the generated paper is still on screen and printable, it just
+// won't show up under Past Generated Papers later.
+async function savePracticePaperToHistory(title, questions, sourceLabel){
+  if (!currentUser) return;
+  try {
+    const ref = await addDoc(collection(db, 'practicePapers'), {
+      userId: currentUser.uid,
+      title: title || 'Practice Paper',
+      questions: questions || [],
+      sourceLabel: sourceLabel || '',
+      createdAt: serverTimestamp()
+    });
+    lastSavedPracticeDocId = ref.id;
+  } catch(err){
+    console.error('Could not save practice paper to history:', err);
+  }
+}
+
+async function openPracticeHistory(){
+  showScreen('screen-practice-history');
+  const listEl = document.getElementById('practiceHistoryList');
+  listEl.innerHTML = `<div class="empty-msg">Loading…</div>`;
+  if (!currentUser){ listEl.innerHTML = `<div class="empty-msg">Sign in to see your generated practice papers.</div>`; return; }
+  try{
+    const q = query(collection(db, 'practicePapers'), where('userId', '==', currentUser.uid), orderBy('createdAt', 'desc'), limit(50));
+    const snap = await getDocs(q);
+    if (snap.empty){
+      listEl.innerHTML = `<div class="empty-msg">No practice papers yet — generate one from the "Practice Paper" button on a graded evaluation.</div>`;
+      return;
+    }
+    const rows = [];
+    snap.forEach(docSnap => {
+      const d = docSnap.data();
+      const dateObj = d.createdAt && d.createdAt.toDate ? d.createdAt.toDate() : null;
+      const dateStr = dateObj ? dateObj.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+      const count = (d.questions || []).length;
+      rows.push(`
+        <div class="history-row" data-id="${docSnap.id}" tabindex="0" role="button">
+          <div class="history-main">
+            <div class="history-title">${escapeHtml(d.title || 'Practice Paper')}</div>
+            <div class="history-date">${escapeHtml(dateStr)}${d.sourceLabel ? ' · From: ' + escapeHtml(d.sourceLabel) : ''}</div>
+          </div>
+          <div class="history-right">
+            <div class="history-stats"><span class="pill correct">${count} question${count === 1 ? '' : 's'}</span></div>
+          </div>
+        </div>`);
+    });
+    listEl.innerHTML = rows.join('');
+    listEl.querySelectorAll('.history-row').forEach(row => {
+      const open = () => openPracticeEntry(row.dataset.id);
+      row.addEventListener('click', open);
+      row.addEventListener('keydown', e => { if (e.key === 'Enter') open(); });
+    });
+  } catch(err){
+    console.error('Could not load practice paper history:', err);
+    listEl.innerHTML = `<div class="empty-msg">Couldn't load your practice papers. If this is the first time, check the browser console for a Firestore "create index" link and click it, then try again.</div>`;
+  }
+}
+
+async function openPracticeEntry(id){
+  try{
+    const snap = await getDoc(doc(db, 'practicePapers', id));
+    if (!snap.exists()) return;
+    const d = snap.data();
+    lastSavedPracticeDocId = id;
+    renderPracticeQuestions(d.title, d.questions || []);
+    showScreen('screen-practice');
+  } catch(err){
+    console.error('Could not open practice paper:', err);
+    alert('Could not open this practice paper. Please try again.');
+  }
+}
 
 // If pages were re-graded via "Retry those pages" after the initial save,
 // update that SAME history entry instead of creating a duplicate.
@@ -1032,12 +1263,29 @@ function showScreen(id){
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
   document.getElementById('newEvalBtn').style.display = (id === 'screen-upload') ? 'none' : 'inline-block';
+  document.querySelectorAll('.sidebar-link').forEach(link => link.classList.toggle('active', link.dataset.screen === id));
 }
 
 function resetToUpload(){
   showScreen('screen-upload');
 }
 document.getElementById('newEvalBtn').addEventListener('click', resetToUpload);
+
+/* ---------- Sidebar navigation (task: left nav, closed by default) ---------- */
+function openSidebar(){
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebarBackdrop').classList.add('active');
+}
+function closeSidebar(){
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarBackdrop').classList.remove('active');
+}
+document.getElementById('sidebarToggle').addEventListener('click', openSidebar);
+document.getElementById('sidebarClose').addEventListener('click', closeSidebar);
+document.getElementById('sidebarBackdrop').addEventListener('click', closeSidebar);
+document.getElementById('navNewEval').addEventListener('click', () => { closeSidebar(); resetToUpload(); });
+document.getElementById('navHistory').addEventListener('click', () => { closeSidebar(); openHistory(); });
+document.getElementById('navPracticeHistory').addEventListener('click', () => { closeSidebar(); openPracticeHistory(); });
 
 document.getElementById('evalBtn').addEventListener('click', () => {
   if (!currentUser && hasUsedFreeTrial()){ showTrialGate(); return; }
@@ -1295,11 +1543,17 @@ function buildReport(questions, failedBatches, isHistory, capMessage){
   // Paper name + rename (task #9) — only meaningful for signed-in users,
   // since anonymous/free-trial grading is never saved anywhere to rename.
   const titleRow = document.getElementById('reportTitleRow');
+  const practiceBtn = document.getElementById('practicePaperBtn');
   if (currentUser){
     document.getElementById('reportTitleText').textContent = currentPaperLabel || 'Untitled evaluation';
     titleRow.style.display = 'flex';
+    // Practice Paper (Phase 6) — only worth offering when there's at least
+    // one wrong/partial question to build a practice paper from.
+    const hasMistakes = currentQuestions.some(q => q.status === 'wrong' || q.status === 'partial');
+    practiceBtn.style.display = hasMistakes ? 'inline-block' : 'none';
   } else {
     titleRow.style.display = 'none';
+    practiceBtn.style.display = 'none';
   }
 
   const warningEl = document.getElementById('warningBanner');
@@ -1491,6 +1745,15 @@ function mistakeWrittenLineOf(q){
     ? q.written[q.mistakeStep - 1] : null;
 }
 
+// Shared by overlayHtmlForAnswerPage() and the practice-paper view (task
+// #11 + Phase 6) so the Silly/Conceptual label text and CSS class always
+// agree wherever a mistakeType is shown.
+function mistakeTypeMeta(mistakeType){
+  const typeClass = ['silly', 'conceptual', 'both'].includes(mistakeType) ? mistakeType : '';
+  const typeLabelText = { silly: 'Silly Mistake', conceptual: 'Conceptual Error', both: 'Conceptual Error & Silly Mistakes' }[typeClass] || '';
+  return { typeClass, typeLabelText };
+}
+
 function renderPage(){
   const pages = activePageSet === 'question' ? questionPages : answerPages;
   const idx = activePageSet === 'question' ? currentQuestionPageIdx : currentAnswerPageIdx;
@@ -1594,8 +1857,7 @@ function overlayHtmlForAnswerPage(answerPageIdx){
         // won't have them, and the AI omits mistakeType when genuinely
         // unsure) — everything here degrades to the original plain-red mark
         // with no label/popup when they're absent.
-        const typeClass = ['silly', 'conceptual', 'both'].includes(q.mistakeType) ? q.mistakeType : '';
-        const typeLabelText = { silly: 'Silly Mistake', conceptual: 'Conceptual Error', both: 'Conceptual Error & Silly Mistakes' }[typeClass] || '';
+        const { typeClass, typeLabelText } = mistakeTypeMeta(q.mistakeType);
         const labelChip = typeLabelText
           ? `<div class="overlay-marklabel ${typeClass}" style="left:${(box.xmin + box.xmax) / 20}%;top:${top}%;">${escapeHtml(typeLabelText)}</div>`
           : '';
