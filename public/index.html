@@ -59,6 +59,15 @@
   .history-title{font-weight:600;color:var(--ink);font-size:14.5px;}
   .history-date{color:var(--muted);font-size:12.5px;margin-top:2px;}
   .history-stats{display:flex;gap:6px;flex-wrap:wrap;}
+  .history-right{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+  .history-actions{display:flex;gap:6px;}
+  .history-action-btn{background:none;border:1px solid var(--border);border-radius:6px;width:28px;height:28px;flex-shrink:0;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;color:var(--ink);}
+  .history-action-btn:hover{background:var(--border);}
+  .history-action-btn.delete:hover{background:var(--wrong-bg);color:var(--wrong);border-color:var(--wrong);}
+  .report-title-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:22px 0 -8px;flex-wrap:wrap;}
+  .report-title{font-family:'Source Serif 4',serif;font-size:19px;font-weight:600;color:var(--ink);}
+  .rename-btn{background:none;border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:12.5px;font-weight:600;color:var(--ink);cursor:pointer;}
+  .rename-btn:hover{border-color:var(--teal);color:var(--teal);}
   .history-no-image{padding:70px 20px;text-align:center;color:var(--muted);font-size:13.5px;}
   .modal-backdrop{position:fixed;inset:0;background:rgba(10,16,22,0.55);z-index:1100;display:none;align-items:center;justify-content:center;padding:20px;}
   .modal-backdrop.active{display:flex;}
@@ -66,6 +75,15 @@
   .modal-card h2{font-family:'Source Serif 4',serif;font-size:20px;margin-bottom:10px;color:var(--ink);}
   .modal-card p{color:var(--muted);font-size:14px;line-height:1.5;margin-bottom:22px;}
   .modal-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;}
+  .onboard-field{margin-bottom:20px;}
+  .onboard-label{display:block;font-size:12.5px;font-weight:600;color:var(--muted);margin-bottom:8px;}
+  .onboard-role-group{display:flex;gap:8px;flex-wrap:wrap;}
+  .onboard-role-btn{flex:1;min-width:88px;padding:10px 8px;border:1.5px solid var(--border);border-radius:8px;background:var(--card);color:var(--ink);font-size:13.5px;font-weight:600;cursor:pointer;}
+  .onboard-role-btn.active{border-color:var(--navy);background:var(--navy);color:#fff;}
+  .onboard-select{width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;background:var(--card);color:var(--ink);font-size:14px;font-family:'Inter',sans-serif;}
+  .onboard-class-chips{display:flex;gap:8px;flex-wrap:wrap;}
+  .onboard-chip{padding:8px 14px;border:1.5px solid var(--border);border-radius:20px;background:var(--card);color:var(--ink);font-size:13px;font-weight:600;cursor:pointer;}
+  .onboard-chip.active{border-color:var(--teal);background:var(--teal-soft);color:var(--teal);}
   .wordmark{display:flex;align-items:center;gap:10px;}
   .wordmark span{font-family:'Source Serif 4',serif;font-size:22px;font-weight:600;color:var(--navy);letter-spacing:-0.01em;}
   :root[data-theme="dark"] .wordmark span{color:var(--ink);}
@@ -317,6 +335,10 @@
   </section>
 
   <section id="screen-report" class="screen">
+    <div class="report-title-row" id="reportTitleRow" style="display:none;">
+      <span class="report-title" id="reportTitleText"></span>
+      <button class="rename-btn" id="renamePaperBtn" type="button" title="Rename this evaluation">✏️ Rename</button>
+    </div>
     <div class="warning-banner" id="warningBanner" style="display:none;"></div>
     <div class="stats-bar" id="statsBar"></div>
     <div class="tabs">
@@ -366,6 +388,30 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="onboardingBackdrop">
+  <div class="modal-card" style="max-width:420px;">
+    <h2>Tell us a bit about you</h2>
+    <p>This helps us tailor PaperEval for you — takes 10 seconds.</p>
+    <div class="onboard-field">
+      <label class="onboard-label">I am a</label>
+      <div class="onboard-role-group" id="onboardRoleGroup">
+        <button type="button" class="onboard-role-btn" data-role="student">Student</button>
+        <button type="button" class="onboard-role-btn" data-role="parent">Parent</button>
+        <button type="button" class="onboard-role-btn" data-role="teacher">Teacher</button>
+      </div>
+    </div>
+    <div class="onboard-field" id="onboardClassField" style="display:none;">
+      <label class="onboard-label" id="onboardClassLabel">Class</label>
+      <select class="onboard-select" id="onboardClassSelect"></select>
+      <div class="onboard-class-chips" id="onboardClassChips" style="display:none;"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="onboardSkipBtn" type="button">Skip for now</button>
+      <button class="btn-primary" id="onboardSaveBtn" type="button" style="padding:12px 24px;font-size:15px;" disabled>Save</button>
+    </div>
+  </div>
+</div>
+
 <div class="lightbox" id="lightbox">
   <div class="lightbox-topbar">
     <span id="lightboxCounter"></span>
@@ -396,7 +442,7 @@ import {
   getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
-  getFirestore, collection, addDoc, updateDoc, doc, getDoc, getDocs,
+  getFirestore, collection, addDoc, updateDoc, setDoc, deleteDoc, doc, getDoc, getDocs,
   query, where, orderBy, limit, serverTimestamp
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
@@ -415,6 +461,9 @@ const googleProvider = new GoogleAuthProvider();
 
 let currentUser = null;
 let lastSavedHistoryDocId = null; // the Firestore doc for the evaluation currently on screen, if any
+let currentPaperLabel = '';       // display name of the evaluation currently on screen (task #9)
+let historySavePromise = null;    // the in-flight saveEvaluationToHistory() call, if any — so a rename
+                                   // right after grading can wait for the doc id instead of silently no-op-ing
 
 function renderAuthArea(){
   const el = document.getElementById('authArea');
@@ -450,6 +499,119 @@ function renderAuthArea(){
 onAuthStateChanged(auth, (user) => {
   currentUser = user;
   renderAuthArea();
+  // One-time onboarding (task #10) — only ever checked once per uid per
+  // page load; showOnboardingModal() itself is a no-op if a profile with a
+  // role already exists, so this never re-prompts someone who's answered.
+  if (user && onboardingCheckedForUid !== user.uid){
+    onboardingCheckedForUid = user.uid;
+    checkOnboarding(user.uid);
+  }
+});
+
+/* ---------- One-time onboarding: role + class, on first Google sign-in (task #10) ---------- */
+const CLASS_OPTIONS = ['Grade 8', 'Grade 9', 'Grade 10', 'Grade 11', 'Grade 12'];
+let onboardingCheckedForUid = null;
+let onboardRole = null;
+let onboardClasses = [];
+
+async function checkOnboarding(uid){
+  try {
+    const snap = await getDoc(doc(db, 'users', uid));
+    if (!snap.exists() || !snap.data().role){
+      showOnboardingModal();
+    }
+  } catch(err){
+    console.error('Could not check onboarding status (never blocks sign-in over this):', err);
+  }
+}
+
+function renderOnboardClassField(){
+  const field = document.getElementById('onboardClassField');
+  const label = document.getElementById('onboardClassLabel');
+  const select = document.getElementById('onboardClassSelect');
+  const chips = document.getElementById('onboardClassChips');
+  if (!onboardRole){ field.style.display = 'none'; return; }
+  field.style.display = 'block';
+  if (onboardRole === 'teacher'){
+    // Teachers can teach more than one class — toggleable chips read better
+    // on mobile than a native multi-select (which needs ctrl/cmd-click on
+    // desktop and is fiddly to use with touch).
+    label.textContent = 'Which classes do you teach? (select all that apply)';
+    select.style.display = 'none';
+    chips.style.display = 'flex';
+    chips.innerHTML = CLASS_OPTIONS.map(c => `<button type="button" class="onboard-chip ${onboardClasses.includes(c) ? 'active' : ''}" data-class="${escapeHtml(c)}">${escapeHtml(c)}</button>`).join('');
+    chips.querySelectorAll('.onboard-chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const c = btn.dataset.class;
+        onboardClasses = onboardClasses.includes(c) ? onboardClasses.filter(x => x !== c) : [...onboardClasses, c];
+        renderOnboardClassField();
+        updateOnboardSaveEnabled();
+      });
+    });
+  } else {
+    label.textContent = 'Class';
+    chips.style.display = 'none';
+    select.style.display = '';
+    select.innerHTML = `<option value="">Select…</option>` + CLASS_OPTIONS.map(c => `<option value="${escapeHtml(c)}" ${onboardClasses[0] === c ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
+  }
+}
+
+document.getElementById('onboardClassSelect').addEventListener('change', (e) => {
+  onboardClasses = e.target.value ? [e.target.value] : [];
+  updateOnboardSaveEnabled();
+});
+
+document.querySelectorAll('.onboard-role-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    onboardRole = btn.dataset.role;
+    onboardClasses = []; // switching role clears any classes picked under the old one
+    document.querySelectorAll('.onboard-role-btn').forEach(b => b.classList.toggle('active', b === btn));
+    renderOnboardClassField();
+    updateOnboardSaveEnabled();
+  });
+});
+
+function updateOnboardSaveEnabled(){
+  document.getElementById('onboardSaveBtn').disabled = !(onboardRole && onboardClasses.length);
+}
+
+function showOnboardingModal(){
+  onboardRole = null;
+  onboardClasses = [];
+  document.querySelectorAll('.onboard-role-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('onboardClassField').style.display = 'none';
+  updateOnboardSaveEnabled();
+  document.getElementById('onboardingBackdrop').classList.add('active');
+}
+function hideOnboardingModal(){
+  document.getElementById('onboardingBackdrop').classList.remove('active');
+}
+
+// "Skip for now" just closes the box without saving — nothing marks it
+// permanently skipped, so it asks again next time this account signs in
+// until a role is actually saved. Simple, and never blocks using the app.
+document.getElementById('onboardSkipBtn').addEventListener('click', hideOnboardingModal);
+
+document.getElementById('onboardSaveBtn').addEventListener('click', async () => {
+  if (!onboardRole || !onboardClasses.length || !currentUser) return;
+  const btn = document.getElementById('onboardSaveBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  try {
+    await setDoc(doc(db, 'users', currentUser.uid), {
+      role: onboardRole,
+      classes: onboardClasses,
+      email: currentUser.email || null,
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+    hideOnboardingModal();
+  } catch(err){
+    console.error('Could not save profile:', err);
+    alert('Could not save — please try again.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save';
+  }
 });
 
 /* ---------- Free-trial gate: 1 evaluation anonymously, then sign-in ---------- */
@@ -525,20 +687,27 @@ function computeTotals(questions){
   };
 }
 
+// Default name for a freshly-graded evaluation, before the user renames it.
+function defaultPaperLabel(){
+  return (answerFiles && answerFiles[0] && answerFiles[0].name) || `Evaluation — ${new Date().toLocaleDateString('en-IN')}`;
+}
+
 // Saves a freshly-graded report as a new history entry (signed-in users
 // only). JSON round-tripping strips any `undefined` field values (e.g. an
 // omitted mistakeCorrect on a correct/unanswered question) that Firestore
-// would otherwise reject outright.
+// would otherwise reject outright. Uses currentPaperLabel (set by the
+// caller) rather than recomputing it, so the saved name always matches
+// whatever's shown on screen — including a rename that landed before this
+// save finished.
 async function saveEvaluationToHistory(questions, totals){
   if (!currentUser) { lastSavedHistoryDocId = null; return; }
   try{
-    const paperLabel = (answerFiles && answerFiles[0] && answerFiles[0].name) || `Evaluation — ${new Date().toLocaleDateString('en-IN')}`;
     const clean = JSON.parse(JSON.stringify(questions));
     const ref = await addDoc(collection(db, 'evaluations'), {
       userId: currentUser.uid,
       userEmail: currentUser.email || null,
       createdAt: serverTimestamp(),
-      paperLabel,
+      paperLabel: currentPaperLabel || defaultPaperLabel(),
       totals,
       questions: clean
     });
@@ -548,6 +717,23 @@ async function saveEvaluationToHistory(questions, totals){
     lastSavedHistoryDocId = null;
   }
 }
+
+// Renames the evaluation currently on screen (task #9) — updates the visible
+// title immediately, then persists it once we have a Firestore doc id
+// (waiting out an in-flight save if grading just finished a moment ago).
+document.getElementById('renamePaperBtn').addEventListener('click', async () => {
+  const proposed = prompt('Rename this evaluation:', currentPaperLabel || '');
+  if (proposed === null) return; // cancelled
+  const trimmed = proposed.trim();
+  if (!trimmed) return;
+  currentPaperLabel = trimmed;
+  document.getElementById('reportTitleText').textContent = currentPaperLabel;
+  if (!lastSavedHistoryDocId && historySavePromise){ await historySavePromise; }
+  if (lastSavedHistoryDocId){
+    try { await updateDoc(doc(db, 'evaluations', lastSavedHistoryDocId), { paperLabel: currentPaperLabel }); }
+    catch(err){ console.error('Could not save the new name:', err); }
+  }
+});
 
 // If pages were re-graded via "Retry those pages" after the initial save,
 // update that SAME history entry instead of creating a duplicate.
@@ -586,11 +772,17 @@ async function openHistory(){
             <div class="history-title">${escapeHtml(d.paperLabel || 'Untitled evaluation')}</div>
             <div class="history-date">${escapeHtml(dateStr)}</div>
           </div>
-          <div class="history-stats">
-            <span class="pill correct">${t.correct || 0} correct</span>
-            <span class="pill wrong">${t.wrong || 0} wrong</span>
-            <span class="pill partial">${t.partial || 0} partial</span>
-            <span class="pill unanswered">${t.unanswered || 0} unanswered</span>
+          <div class="history-right">
+            <div class="history-stats">
+              <span class="pill correct">${t.correct || 0} correct</span>
+              <span class="pill wrong">${t.wrong || 0} wrong</span>
+              <span class="pill partial">${t.partial || 0} partial</span>
+              <span class="pill unanswered">${t.unanswered || 0} unanswered</span>
+            </div>
+            <div class="history-actions">
+              <button class="history-action-btn" data-action="rename" title="Rename" type="button">✏️</button>
+              <button class="history-action-btn delete" data-action="delete" title="Delete" type="button">🗑️</button>
+            </div>
           </div>
         </div>`);
     });
@@ -599,6 +791,47 @@ async function openHistory(){
       const open = () => openHistoryEntry(row.dataset.id);
       row.addEventListener('click', open);
       row.addEventListener('keydown', e => { if (e.key === 'Enter') open(); });
+    });
+    // Rename/delete (task #9) — stopPropagation so a click on either icon
+    // doesn't also open the entry via the row's own click listener above.
+    listEl.querySelectorAll('.history-action-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const row = btn.closest('.history-row');
+        const id = row.dataset.id;
+        if (btn.dataset.action === 'delete'){
+          if (!confirm('Delete this evaluation from your history? This cannot be undone.')) return;
+          try {
+            await deleteDoc(doc(db, 'evaluations', id));
+            row.remove();
+            if (!listEl.querySelector('.history-row')){
+              listEl.innerHTML = `<div class="empty-msg">No saved evaluations yet — evaluations you grade while signed in will show up here.</div>`;
+            }
+          } catch(err){
+            console.error('Could not delete evaluation:', err);
+            alert('Could not delete this evaluation. Please try again.');
+          }
+        } else if (btn.dataset.action === 'rename'){
+          const titleEl = row.querySelector('.history-title');
+          const proposed = prompt('Rename this evaluation:', titleEl.textContent);
+          if (proposed === null) return;
+          const trimmed = proposed.trim();
+          if (!trimmed || trimmed === titleEl.textContent) return;
+          try {
+            await updateDoc(doc(db, 'evaluations', id), { paperLabel: trimmed });
+            titleEl.textContent = trimmed;
+            // Keep the report screen in sync if this is the entry currently open there.
+            if (lastSavedHistoryDocId === id){
+              currentPaperLabel = trimmed;
+              const reportTitleText = document.getElementById('reportTitleText');
+              if (reportTitleText) reportTitleText.textContent = trimmed;
+            }
+          } catch(err){
+            console.error('Could not rename evaluation:', err);
+            alert('Could not rename this evaluation. Please try again.');
+          }
+        }
+      });
     });
   } catch(err){
     console.error('Could not load history:', err);
@@ -618,6 +851,7 @@ async function openHistoryEntry(id){
     questionPages = [];
     answerPages = [];
     lastSavedHistoryDocId = id;
+    currentPaperLabel = d.paperLabel || 'Untitled evaluation';
     buildReport(d.questions || [], [], true);
     showScreen('screen-report');
   } catch(err){
@@ -933,10 +1167,11 @@ async function runEvaluation(){
     // already graded) — no point offering a "Retry" button for those
     // specific pages, so pass the message through instead.
     const capFailure = failures.find(f => f.capExceeded);
+    currentPaperLabel = defaultPaperLabel(); // fresh evaluation — starts its own name, not whatever was open before
     buildReport(merged, lastFailedBatches, false, capFailure ? capFailure.error : null);
     showScreen('screen-report');
     lastSavedHistoryDocId = null; // fresh evaluation — starts its own history entry, not an update to whatever was open before
-    saveEvaluationToHistory(merged, computeTotals(merged));
+    historySavePromise = saveEvaluationToHistory(merged, computeTotals(merged));
     if (!currentUser) markFreeTrialUsed();
   } catch(err){
     console.error(err);
@@ -1056,6 +1291,16 @@ function buildReport(questions, failedBatches, isHistory, capMessage){
   currentQuestions = questions || [];
   viewingHistory = !!isHistory;
   const totals = computeTotals(currentQuestions);
+
+  // Paper name + rename (task #9) — only meaningful for signed-in users,
+  // since anonymous/free-trial grading is never saved anywhere to rename.
+  const titleRow = document.getElementById('reportTitleRow');
+  if (currentUser){
+    document.getElementById('reportTitleText').textContent = currentPaperLabel || 'Untitled evaluation';
+    titleRow.style.display = 'flex';
+  } else {
+    titleRow.style.display = 'none';
+  }
 
   const warningEl = document.getElementById('warningBanner');
   if (capMessage){
