@@ -26,11 +26,13 @@ const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GE
 
 // --- Auth helpers (duplicated from api/evaluate.js on purpose — see note above) ---
 let adminReady = null;
+let adminInitError = null; // TEMPORARY DIAGNOSTIC — short, safe message only, see verifyUidFromRequest
 function ensureAdminInitialized() {
   if (adminReady !== null) return adminReady;
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (!raw) {
     console.warn('FIREBASE_SERVICE_ACCOUNT_JSON not set — /api/generate-practice cannot verify sign-in and will reject every request.');
+    adminInitError = 'env_var_missing';
     adminReady = false;
     return adminReady;
   }
@@ -42,21 +44,29 @@ function ensureAdminInitialized() {
     adminReady = true;
   } catch (e) {
     console.error('Failed to initialize firebase-admin from FIREBASE_SERVICE_ACCOUNT_JSON:', e.message);
+    adminInitError = e.message;
     adminReady = false;
   }
   return adminReady;
 }
 
+// TEMPORARY DIAGNOSTIC (Sept 2026): returns a short, non-sensitive reason
+// code alongside uid so the 401 response below can tell us WHY sign-in
+// verification failed, without needing Vercel log access. Safe to leave in
+// — it never includes the token, the service-account contents, or any
+// stack trace, only a short classification. Remove the "reason" plumbing
+// once the practice-paper 401 is resolved, if desired (purely cosmetic).
 async function verifyUidFromRequest(req) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7).trim() : null;
-  if (!token || !ensureAdminInitialized()) return null;
+  if (!token) return { uid: null, reason: 'no_token_sent' };
+  if (!ensureAdminInitialized()) return { uid: null, reason: 'admin_not_configured: ' + adminInitError };
   try {
     const decoded = await admin.auth().verifyIdToken(token);
-    return decoded.uid;
+    return { uid: decoded.uid, reason: null };
   } catch (e) {
     console.warn('ID token verification failed:', e.message);
-    return null;
+    return { uid: null, reason: 'token_verify_failed: ' + e.message };
   }
 }
 
@@ -114,9 +124,11 @@ export default async function handler(req, res) {
     return;
   }
 
-  const uid = await verifyUidFromRequest(req);
+  const { uid, reason } = await verifyUidFromRequest(req);
   if (!uid) {
-    res.status(401).json({ error: 'Sign in required to generate a practice paper.' });
+    // "reason" is a temporary diagnostic (see verifyUidFromRequest) — safe,
+    // short, no secrets — so we can see WHY without Vercel log access.
+    res.status(401).json({ error: 'Sign in required to generate a practice paper.', reason });
     return;
   }
 
