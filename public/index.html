@@ -872,7 +872,10 @@ async function generatePracticePaper(){
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok){
-      alert(data.error || 'Could not generate the practice paper. Please try again.');
+      // data.reason is a TEMPORARY diagnostic field from the server (see
+      // api/generate-practice.js) — shown here too so it's visible without
+      // needing Vercel log access. Safe to remove once the issue is fixed.
+      alert((data.error || 'Could not generate the practice paper. Please try again.') + (data.reason ? '\n\n[debug] ' + data.reason : ''));
       return;
     }
 
