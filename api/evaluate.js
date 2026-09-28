@@ -17,7 +17,17 @@
 // in and to read/write the usage-cap counters below; it can't touch the
 // Gemini API key or anything else.
 
-import admin from 'firebase-admin';
+// Defensive default-export unwrap: on Vercel's bundler, "import admin from
+// 'firebase-admin'" can resolve to a bare namespace object with no
+// ".default" (firebase-admin ships as a plain CommonJS module, not an ESM
+// one) — that silently left "admin" undefined here too. Because this
+// function "fails open" (grading proceeds without caps when admin isn't
+// usable — see ensureAdminInitialized below), this exact bug has likely
+// been silently skipping the per-user usage cap and uid-tagging on every
+// evaluation so far, with no visible error. This works either way the
+// bundler resolves it.
+import * as adminPkg from 'firebase-admin';
+const admin = adminPkg.default || adminPkg;
 
 export const config = {
   api: {
