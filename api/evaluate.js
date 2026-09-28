@@ -17,17 +17,16 @@
 // in and to read/write the usage-cap counters below; it can't touch the
 // Gemini API key or anything else.
 
-// Defensive default-export unwrap: on Vercel's bundler, "import admin from
-// 'firebase-admin'" can resolve to a bare namespace object with no
-// ".default" (firebase-admin ships as a plain CommonJS module, not an ESM
-// one) — that silently left "admin" undefined here too. Because this
-// function "fails open" (grading proceeds without caps when admin isn't
-// usable — see ensureAdminInitialized below), this exact bug has likely
-// been silently skipping the per-user usage cap and uid-tagging on every
-// evaluation so far, with no visible error. This works either way the
-// bundler resolves it.
-import * as adminPkg from 'firebase-admin';
-const admin = adminPkg.default || adminPkg;
+// firebase-admin ^14.x ships the MODULAR API — there is no "admin.apps",
+// "admin.auth()", "admin.firestore()" or "admin.credential.cert()"
+// namespace object at all (that's the old v9-v11 shape this file was
+// originally written against, which is why sign-in verification and the
+// usage-cap counters have been silently failing this whole time — a real
+// bug, not a Vercel/bundler quirk). Each service is its own named import
+// from its own subpath instead.
+import { initializeApp, cert, getApps } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 
 export const config = {
   api: {
@@ -88,8 +87,8 @@ function getClientIp(req) {
 // configured. If it isn't set (yet), caps are skipped entirely rather than
 // blocking everyone's grading over a missing/misconfigured env var — see
 // README for the one-time setup step. Returns true/false ("is admin usable
-// right now"), not the app itself — admin.firestore()/admin.auth() below
-// always operate on the one default app once initializeApp() has run.
+// right now"), not the app itself — getFirestore()/getAuth() below always
+// operate on the one default app once initializeApp() has run.
 let adminReady = null;
 function ensureAdminInitialized() {
   if (adminReady !== null) return adminReady; // already resolved
@@ -100,9 +99,9 @@ function ensureAdminInitialized() {
     return adminReady;
   }
   try {
-    if (!admin.apps.length) {
+    if (!getApps().length) {
       const serviceAccount = JSON.parse(raw);
-      admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+      initializeApp({ credential: cert(serviceAccount) });
     }
     adminReady = true;
   } catch (e) {
@@ -120,7 +119,7 @@ async function verifyUidFromRequest(req) {
   const token = header.startsWith('Bearer ') ? header.slice(7).trim() : null;
   if (!token || !ensureAdminInitialized()) return null;
   try {
-    const decoded = await admin.auth().verifyIdToken(token);
+    const decoded = await getAuth().verifyIdToken(token);
     return decoded.uid;
   } catch (e) {
     console.warn('ID token verification failed (treating request as anonymous):', e.message);
@@ -133,7 +132,7 @@ async function verifyUidFromRequest(req) {
 // capped request never costs anything).
 async function checkQuota(uid, ip) {
   if (!ensureAdminInitialized()) return { blocked: false }; // admin not configured — caps disabled
-  const db = admin.firestore();
+  const db = getFirestore();
   const mk = monthKey();
 
   const reads = [db.collection('ipUsage').doc(`${ip}_${mk}`).get()];
@@ -160,9 +159,9 @@ async function checkQuota(uid, ip) {
 async function recordUsage(uid, ip, paise) {
   if (!ensureAdminInitialized() || paise <= 0) return;
   try {
-    const db = admin.firestore();
+    const db = getFirestore();
     const mk = monthKey();
-    const inc = { count: admin.firestore.FieldValue.increment(1), paise: admin.firestore.FieldValue.increment(paise) };
+    const inc = { count: FieldValue.increment(1), paise: FieldValue.increment(paise) };
     const writes = [db.collection('ipUsage').doc(`${ip}_${mk}`).set(inc, { merge: true })];
     if (uid) writes.push(db.collection('usage').doc(`${uid}_${mk}`).set(inc, { merge: true }));
     await Promise.all(writes);
