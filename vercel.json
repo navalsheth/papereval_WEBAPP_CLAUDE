@@ -2,6 +2,9 @@
   "functions": {
     "api/evaluate.js": {
       "maxDuration": 300
+    },
+    "api/generate-practice.js": {
+      "maxDuration": 60
     }
   }
 }
