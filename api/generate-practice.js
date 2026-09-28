@@ -19,7 +19,14 @@
 // history, so there is nothing useful this endpoint can do for a
 // signed-out caller.
 
-import admin from 'firebase-admin';
+// Defensive default-export unwrap: on Vercel's bundler, "import admin from
+// 'firebase-admin'" can resolve to a bare namespace object with no
+// ".default" (firebase-admin ships as a plain CommonJS module, not an ESM
+// one) — that left "admin" undefined and every call below crashed with
+// "Cannot read properties of undefined (reading 'apps')". This works either
+// way the bundler resolves it.
+import * as adminPkg from 'firebase-admin';
+const admin = adminPkg.default || adminPkg;
 
 const GEMINI_MODEL = 'gemini-3.6-flash';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
