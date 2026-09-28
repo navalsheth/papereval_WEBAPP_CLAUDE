@@ -132,24 +132,37 @@ async function verifyUidFromRequest(req) {
 // capped request never costs anything).
 async function checkQuota(uid, ip) {
   if (!ensureAdminInitialized()) return { blocked: false }; // admin not configured — caps disabled
-  const db = getFirestore();
-  const mk = monthKey();
+  // Same "never block grading over a caps-check hiccup" philosophy as
+  // ensureAdminInitialized()/recordUsage() below — this was previously the
+  // ONE place in the file that could throw straight out of the handler
+  // (a Firestore permission/network error here had no try/catch), which
+  // crashes the whole request before Gemini is ever called. That failure
+  // is a platform-level error page (not JSON), so the frontend reports it
+  // as every page group "timed out or errored" — grading looked totally
+  // broken even though Gemini itself was never the problem.
+  try {
+    const db = getFirestore();
+    const mk = monthKey();
 
-  const reads = [db.collection('ipUsage').doc(`${ip}_${mk}`).get()];
-  if (uid) reads.push(db.collection('usage').doc(`${uid}_${mk}`).get());
-  const [ipSnap, uidSnap] = await Promise.all(reads);
+    const reads = [db.collection('ipUsage').doc(`${ip}_${mk}`).get()];
+    if (uid) reads.push(db.collection('usage').doc(`${uid}_${mk}`).get());
+    const [ipSnap, uidSnap] = await Promise.all(reads);
 
-  if (uidSnap) {
-    const d = uidSnap.data() || {};
-    if ((d.count || 0) >= USER_MONTHLY_CAP.count || (d.paise || 0) >= USER_MONTHLY_CAP.paise) {
+    if (uidSnap) {
+      const d = uidSnap.data() || {};
+      if ((d.count || 0) >= USER_MONTHLY_CAP.count || (d.paise || 0) >= USER_MONTHLY_CAP.paise) {
+        return { blocked: true, message: CAP_MESSAGE };
+      }
+    }
+    const ipData = ipSnap.data() || {};
+    if ((ipData.count || 0) >= IP_MONTHLY_CAP.count || (ipData.paise || 0) >= IP_MONTHLY_CAP.paise) {
       return { blocked: true, message: CAP_MESSAGE };
     }
+    return { blocked: false };
+  } catch (e) {
+    console.error('checkQuota failed (non-fatal — caps skipped for this request):', e.message);
+    return { blocked: false };
   }
-  const ipData = ipSnap.data() || {};
-  if ((ipData.count || 0) >= IP_MONTHLY_CAP.count || (ipData.paise || 0) >= IP_MONTHLY_CAP.paise) {
-    return { blocked: true, message: CAP_MESSAGE };
-  }
-  return { blocked: false };
 }
 
 // Records what this batch call actually spent, regardless of whether the
