@@ -19,14 +19,14 @@
 // history, so there is nothing useful this endpoint can do for a
 // signed-out caller.
 
-// Defensive default-export unwrap: on Vercel's bundler, "import admin from
-// 'firebase-admin'" can resolve to a bare namespace object with no
-// ".default" (firebase-admin ships as a plain CommonJS module, not an ESM
-// one) — that left "admin" undefined and every call below crashed with
-// "Cannot read properties of undefined (reading 'apps')". This works either
-// way the bundler resolves it.
-import * as adminPkg from 'firebase-admin';
-const admin = adminPkg.default || adminPkg;
+// firebase-admin ^14.x ships the MODULAR API — there is no "admin.apps",
+// "admin.auth()" or "admin.credential.cert()" namespace object at all
+// (that's the old v9-v11 shape this file was originally written against,
+// which is the actual reason sign-in verification has been failing — a
+// real bug, not a Vercel/bundler quirk). Each service is its own named
+// import from its own subpath instead.
+import { initializeApp, cert, getApps } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
 
 const GEMINI_MODEL = 'gemini-3.6-flash';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
@@ -44,9 +44,9 @@ function ensureAdminInitialized() {
     return adminReady;
   }
   try {
-    if (!admin.apps.length) {
+    if (!getApps().length) {
       const serviceAccount = JSON.parse(raw);
-      admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+      initializeApp({ credential: cert(serviceAccount) });
     }
     adminReady = true;
   } catch (e) {
@@ -69,7 +69,7 @@ async function verifyUidFromRequest(req) {
   if (!token) return { uid: null, reason: 'no_token_sent' };
   if (!ensureAdminInitialized()) return { uid: null, reason: 'admin_not_configured: ' + adminInitError };
   try {
-    const decoded = await admin.auth().verifyIdToken(token);
+    const decoded = await getAuth().verifyIdToken(token);
     return { uid: decoded.uid, reason: null };
   } catch (e) {
     console.warn('ID token verification failed:', e.message);
